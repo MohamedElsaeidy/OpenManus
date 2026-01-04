@@ -185,7 +185,7 @@ OpenManus is built by contributors from MetaGPT. Huge thanks to this agent commu
 ## Cite
 ```bibtex
 @misc{openmanus2025,
-  author = {Xinbin Liang and Jinyu Xiang and Zhaoyang Yu and Jiayi Zhang and Sirui Hong and Sheng Fan and Xiao Tang},
+  author = {Xinbin Liang and Jinyu Xiang and Zhaoyang Yu and Jiayi Zhang and Sirui Hong and Sheng Fan and Xiao Tang and Bang Liu and Yuyu Luo and Chenglin Wu},
   title = {OpenManus: An open-source framework for building general AI agents},
   year = {2025},
   publisher = {Zenodo},
