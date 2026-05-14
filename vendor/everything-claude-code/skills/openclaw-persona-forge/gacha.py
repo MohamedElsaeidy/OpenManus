@@ -185,7 +185,9 @@ def main():
         draw_count = 1
     draw_count = max(1, min(draw_count, 5))
 
-    total = len(FORMER_LIVES) * len(REASONS) * len(VIBES) * len(SPEECH_STYLES) * len(PROPS)
+    total = (
+        len(FORMER_LIVES) * len(REASONS) * len(VIBES) * len(SPEECH_STYLES) * len(PROPS)
+    )
 
     print("LOBSTER ═════════════════════════════")
     print("   龙虾灵魂抽卡机 v2.0")

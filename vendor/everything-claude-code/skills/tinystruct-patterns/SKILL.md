@@ -97,7 +97,7 @@ Use JUnit 5 to test actions by verifying they are registered in the `ActionRegis
 void testActionRegistration() {
     Application app = new MyService();
     app.init();
-    
+
     ActionRegistry registry = ActionRegistry.getInstance();
     assertNotNull(registry.get("greet"));
 }

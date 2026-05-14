@@ -26,7 +26,12 @@ from app.task_context import (
 from core.task import TaskStatus
 from core.task_registry import TaskRegistry
 from server.celery_app import celery_app
-from server.models import ConversationEventORM, ObsidianEdgeORM, ObsidianNoteORM, TaskORM
+from server.models import (
+    ConversationEventORM,
+    ObsidianEdgeORM,
+    ObsidianNoteORM,
+    TaskORM,
+)
 
 
 registry = TaskRegistry()
@@ -157,6 +162,29 @@ def get_task_auto_context_compress(task_id: str) -> bool:
         return True
     task_input = orm.input or {}
     raw = task_input.get("auto_context_compress")
+    if raw is None:
+        return True
+    return bool(raw)
+
+
+def get_task_disabled_skills(task_id: str) -> set[str]:
+    orm = get_task_record(task_id)
+    if orm is None:
+        return set()
+    task_input = orm.input or {}
+    return {
+        str(name).strip()
+        for name in task_input.get("disabled_skills", [])
+        if str(name).strip()
+    }
+
+
+def get_task_enable_vendor_skills(task_id: str) -> bool:
+    orm = get_task_record(task_id)
+    if orm is None:
+        return True
+    task_input = orm.input or {}
+    raw = task_input.get("enable_vendor_skills")
     if raw is None:
         return True
     return bool(raw)
@@ -396,6 +424,8 @@ def run_task(task_id: str, prompt: Optional[str] = None):
     disabled_tools = get_disabled_tools() | get_task_disabled_tools(task_id)
     requested_context_window = get_task_requested_context_window(task_id)
     auto_context_compress = get_task_auto_context_compress(task_id)
+    disabled_skills = get_task_disabled_skills(task_id)
+    enable_vendor_skills = get_task_enable_vendor_skills(task_id)
     llm_connection = get_llm_connection()
     workspace_root = conversation_workspace(conversation_id)
     host_workspace_root = host_conversation_workspace(conversation_id)
@@ -431,7 +461,12 @@ def run_task(task_id: str, prompt: Optional[str] = None):
             )
             obsidian_context = build_obsidian_context(conversation_id)
             skill_context = format_skill_context(
-                select_skills(prompt or "", workspace_root)
+                select_skills(
+                    prompt or "",
+                    workspace_root,
+                    include_vendor=enable_vendor_skills,
+                    disabled_skills=disabled_skills,
+                )
             )
             if sandbox is not None:
                 continuity = continuity.replace(
@@ -441,9 +476,7 @@ def run_task(task_id: str, prompt: Optional[str] = None):
                     str(workspace_root), config.sandbox.work_dir
                 )
             context_parts = [
-                part
-                for part in (continuity, obsidian_context, skill_context)
-                if part
+                part for part in (continuity, obsidian_context, skill_context) if part
             ]
             combined_context = "\n\n".join(context_parts)
             run_prompt = (

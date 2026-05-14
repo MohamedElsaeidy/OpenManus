@@ -60,14 +60,16 @@ def parse_trace(path: Path) -> list[ObservationEvent]:
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON at line {i}: {e}") from e
         try:
-            events.append(ObservationEvent(
-                timestamp=raw["timestamp"],
-                event=raw["event"],
-                tool=raw["tool"],
-                session=raw["session"],
-                input=raw.get("input", ""),
-                output=raw.get("output", ""),
-            ))
+            events.append(
+                ObservationEvent(
+                    timestamp=raw["timestamp"],
+                    event=raw["event"],
+                    tool=raw["tool"],
+                    session=raw["session"],
+                    input=raw.get("input", ""),
+                    output=raw.get("output", ""),
+                )
+            )
         except KeyError as e:
             raise ValueError(f"Missing required field {e} at line {i}") from e
 
@@ -83,16 +85,18 @@ def parse_spec(path: Path) -> ComplianceSpec:
     steps: list[Step] = []
     for s in raw["steps"]:
         d = s["detector"]
-        steps.append(Step(
-            id=s["id"],
-            description=s["description"],
-            required=s["required"],
-            detector=Detector(
-                description=d["description"],
-                after_step=d.get("after_step"),
-                before_step=d.get("before_step"),
-            ),
-        ))
+        steps.append(
+            Step(
+                id=s["id"],
+                description=s["description"],
+                required=s["required"],
+                detector=Detector(
+                    description=d["description"],
+                    after_step=d.get("after_step"),
+                    before_step=d.get("before_step"),
+                ),
+            )
+        )
 
     if "scoring" not in raw:
         raise KeyError("Missing 'scoring' section in compliance spec")

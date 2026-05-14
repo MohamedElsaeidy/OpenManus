@@ -101,12 +101,14 @@ def grade(
         elif failure_reason is None:
             failure_reason = f"no matching event classified for step '{step.id}'"
 
-        step_results.append(StepResult(
-            step_id=step.id,
-            detected=detected,
-            evidence=tuple(matched),
-            failure_reason=failure_reason if not detected else None,
-        ))
+        step_results.append(
+            StepResult(
+                step_id=step.id,
+                detected=detected,
+                evidence=tuple(matched),
+                failure_reason=failure_reason if not detected else None,
+            )
+        )
 
     required_ids = {s.id for s in spec.steps if s.required}
     required_steps = [s for s in step_results if s.step_id in required_ids]

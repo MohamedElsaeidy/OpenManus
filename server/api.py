@@ -2,9 +2,9 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import secrets
 import shutil
-import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -707,6 +707,8 @@ def _task_input(
     disabled_tools: Optional[list[str]] = None,
     requested_context_window: Optional[int] = None,
     auto_context_compress: Optional[bool] = None,
+    disabled_skills: Optional[list[str]] = None,
+    enable_vendor_skills: Optional[bool] = None,
 ) -> dict:
     data = {"conversation_id": conversation_id}
     if prompt:
@@ -721,6 +723,12 @@ def _task_input(
         data["requested_context_window"] = int(requested_context_window)
     if auto_context_compress is not None:
         data["auto_context_compress"] = bool(auto_context_compress)
+    if disabled_skills:
+        data["disabled_skills"] = [
+            str(name) for name in disabled_skills if str(name).strip()
+        ]
+    if enable_vendor_skills is not None:
+        data["enable_vendor_skills"] = bool(enable_vendor_skills)
     return data
 
 
@@ -953,14 +961,39 @@ async def list_skills(
 ):
     user = _require_user(request)
     workspace = None
+    include_vendor = True
+    disabled_skills: set[str] = set()
     if conversation_id:
         with registry.SessionLocal() as session:
-            _require_conversation(session, user.user_id, conversation_id)
+            conversation = _require_conversation(session, user.user_id, conversation_id)
+            settings = conversation.settings or {}
+            include_vendor = bool(settings.get("enable_vendor_skills", True))
+            disabled_skills = {
+                str(name)
+                for name in (settings.get("disabled_skills") or [])
+                if str(name).strip()
+            }
         workspace = Path(WORKSPACE_ROOT) / "conversations" / conversation_id
     skills = (
-        select_skills(prompt or "", workspace) if prompt else load_skills(workspace)
+        select_skills(
+            prompt or "",
+            workspace,
+            include_vendor=include_vendor,
+            disabled_skills=disabled_skills,
+        )
+        if prompt
+        else load_skills(
+            workspace,
+            include_vendor=include_vendor,
+            disabled_skills=set(),
+        )
     )
-    return {"skills": [skill.summary() for skill in skills]}
+    output = []
+    for skill in skills:
+        item = skill.summary()
+        item["enabled"] = skill.name not in disabled_skills
+        output.append(item)
+    return {"skills": output}
 
 
 async def _task_stream_progress(task: TaskORM) -> list[dict]:
@@ -1570,6 +1603,14 @@ async def update_conversation_settings(request: Request, conversation_id: str):
                 settings["requested_context_window"] = value
         if "auto_context_compress" in body:
             settings["auto_context_compress"] = bool(body.get("auto_context_compress"))
+        if "disabled_skills" in body:
+            settings["disabled_skills"] = [
+                str(name).strip()
+                for name in body.get("disabled_skills", [])
+                if str(name).strip()
+            ]
+        if "enable_vendor_skills" in body:
+            settings["enable_vendor_skills"] = bool(body.get("enable_vendor_skills"))
         conversation.settings = settings
         conversation.updated_at = _now()
         session.commit()
@@ -1851,6 +1892,12 @@ async def create_task(
                 auto_context_compress = (conversation_settings or {}).get(
                     "auto_context_compress", True
                 )
+                disabled_skills = list(
+                    (conversation_settings or {}).get("disabled_skills", [])
+                )
+                enable_vendor_skills = bool(
+                    (conversation_settings or {}).get("enable_vendor_skills", True)
+                )
                 if conversation is not None:
                     conversation.updated_at = _now()
                     session.commit()
@@ -1864,6 +1911,8 @@ async def create_task(
                         disabled_tools=disabled_tools,
                         requested_context_window=requested_context_window,
                         auto_context_compress=auto_context_compress,
+                        disabled_skills=disabled_skills,
+                        enable_vendor_skills=enable_vendor_skills,
                     )
                 )
                 task.status = TaskStatus.CREATED
@@ -1910,6 +1959,10 @@ async def create_task(
         auto_context_compress = (conversation.settings or {}).get(
             "auto_context_compress", True
         )
+        disabled_skills = list((conversation.settings or {}).get("disabled_skills", []))
+        enable_vendor_skills = bool(
+            (conversation.settings or {}).get("enable_vendor_skills", True)
+        )
         conversation.updated_at = _now()
         session.commit()
         conversation_id = str(conversation.conversation_id)
@@ -1923,6 +1976,8 @@ async def create_task(
             disabled_tools=disabled_tools,
             requested_context_window=requested_context_window,
             auto_context_compress=auto_context_compress,
+            disabled_skills=disabled_skills,
+            enable_vendor_skills=enable_vendor_skills,
         ),
     )
     task.status = TaskStatus.CREATED
@@ -2018,6 +2073,12 @@ async def send_conversation_message(request: Request, conversation_id: str):
             auto_context_compress = (conversation.settings or {}).get(
                 "auto_context_compress", True
             )
+            disabled_skills = list(
+                (conversation.settings or {}).get("disabled_skills", [])
+            )
+            enable_vendor_skills = bool(
+                (conversation.settings or {}).get("enable_vendor_skills", True)
+            )
             conversation.updated_at = _now()
             session.commit()
 
@@ -2042,6 +2103,8 @@ async def send_conversation_message(request: Request, conversation_id: str):
             disabled_tools=disabled_tools,
             requested_context_window=requested_context_window,
             auto_context_compress=auto_context_compress,
+            disabled_skills=disabled_skills,
+            enable_vendor_skills=enable_vendor_skills,
         )
     )
     task.status = TaskStatus.CREATED
