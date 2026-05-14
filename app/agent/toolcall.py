@@ -22,6 +22,10 @@ INCOMPLETE_RESPONSE_RE = re.compile(
     r"\b(let me|i(?:'| a)m going to|next i(?:'| a)ll|i(?:'| a)ll now|continuing|to debug|to inspect|to verify)\b",
     re.IGNORECASE,
 )
+FINAL_RESPONSE_RE = re.compile(
+    r"\b(done|completed|finished|implemented|created|verified|here(?:'| i)s what|summary|remaining limitations|blocked)\b",
+    re.IGNORECASE,
+)
 
 
 class ToolCallAgent(ReActAgent):
@@ -42,6 +46,7 @@ class ToolCallAgent(ReActAgent):
     tool_calls: List[ToolCall] = Field(default_factory=list)
     _current_base64_image: Optional[str] = None
     _last_assistant_content: str = ""
+    _consecutive_no_tool_nonfinal: int = 0
 
     max_steps: int = config.agent.max_steps
     max_tools_per_step: int = config.agent.max_tools_per_step
@@ -180,7 +185,8 @@ class ToolCallAgent(ReActAgent):
 
             if self.tool_choices == ToolChoice.AUTO and not self.tool_calls:
                 if content.strip():
-                    if self._looks_incomplete_response(content):
+                    if not self._looks_final_response(content):
+                        self._consecutive_no_tool_nonfinal += 1
                         # The model produced a continuation sentence without tool calls.
                         # Keep the run alive and ask for an actionable next step.
                         task.emit(
@@ -191,11 +197,21 @@ class ToolCallAgent(ReActAgent):
                         )
                         self.memory.add_message(
                             Message.user_message(
-                                "Continue autonomously: either call the next tool(s) now, "
-                                "or provide a final summary of what happened, what worked, and what remains."
+                                "Continue autonomously and follow the existing plan strictly. "
+                                "Either call the next tool(s) now, or if all plan steps are truly done, "
+                                "provide a final summary with what was completed, verification performed, "
+                                "artifact/file paths, and any remaining limitations."
                             )
                         )
+                        if self._consecutive_no_tool_nonfinal >= 3:
+                            task.emit(
+                                "warning",
+                                {
+                                    "message": "Repeated no-tool non-final responses detected; requiring actionable next step."
+                                },
+                            )
                         return True
+                    self._consecutive_no_tool_nonfinal = 0
                     task.emit(
                         "final_response",
                         {
@@ -230,6 +246,20 @@ class ToolCallAgent(ReActAgent):
         if "?" in text:
             return True
         return bool(INCOMPLETE_RESPONSE_RE.search(text))
+
+    @staticmethod
+    def _looks_final_response(content: str) -> bool:
+        text = (content or "").strip()
+        if not text:
+            return False
+        if ToolCallAgent._looks_incomplete_response(text):
+            return False
+        if not FINAL_RESPONSE_RE.search(text):
+            return False
+        # Final responses should not end with an obvious "next action" cliffhanger.
+        if text.endswith(":"):
+            return False
+        return True
 
     async def act(self, task: Task) -> str:
         """Execute tool calls and handle their results."""
