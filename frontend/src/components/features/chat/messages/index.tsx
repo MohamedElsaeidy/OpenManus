@@ -1,8 +1,9 @@
 import { Markdown } from '@/components/block/markdown';
 import { Badge } from '@/components/ui/badge';
 import type { AggregatedMessage, Message } from '@/libs/chat-messages/types';
-import { formatNumber } from '@/libs/utils';
+import { cn, formatNumber } from '@/libs/utils';
 import '@/styles/animations.css';
+import { ChevronDown, CircleCheck, CircleStop, LoaderIcon } from 'lucide-react';
 import { StepBadge } from './step';
 import { ToolMessageContent } from './tools';
 
@@ -10,51 +11,95 @@ interface ChatMessageProps {
   messages: AggregatedMessage[];
 }
 
-const UserMessage = ({ message }: { message: Message<{ request: string }> }) => <Markdown className="chat">{message.content.request}</Markdown>;
+const UserMessage = ({ message }: { message: Message<{ request: string }> }) => (
+  <div className="ml-auto max-w-[78%] rounded-2xl bg-muted px-4 py-3">
+    <Markdown className="chat">{message.content.request}</Markdown>
+  </div>
+);
 
 interface CompletionMessageProps {
-  message: Message<{ results: string[]; total_input_tokens: number; total_completion_tokens: number }>;
+  message: Message<{
+    results?: string[];
+    message?: string;
+    total_input_tokens?: number;
+    total_completion_tokens?: number;
+    reason?: string;
+    workspace?: {
+      pdfs?: string[];
+      tex?: string[];
+      logs?: string[];
+      warning?: string | null;
+    };
+  }>;
 }
 
 const CompletionMessage = ({ message }: CompletionMessageProps) => {
   const showTokenCount = message.content.total_input_tokens || message.content.total_completion_tokens;
+  const workspace = message.content.workspace;
+  const pdfCount = workspace?.pdfs?.length || 0;
+  const logCount = workspace?.logs?.length || 0;
   return (
-    <Badge className="cursor-pointer font-mono">
-      🎉 Awesome! Task Completed{' '}
-      {showTokenCount && (
-        <>
-          (
-          <span>
-            {formatNumber(message.content.total_input_tokens || 0, { autoUnit: true })} input;{' '}
-            {formatNumber(message.content.total_completion_tokens || 0, { autoUnit: true })} completion
-          </span>
-          )
-        </>
+    <div className="inline-flex max-w-full flex-col gap-2">
+      <Badge className="w-fit font-mono" variant="outline">
+        <CircleCheck className="h-3.5 w-3.5 text-emerald-500" />
+        Completed{' '}
+        {showTokenCount && (
+          <>
+            (
+            <span>
+              {formatNumber(message.content.total_input_tokens || 0, { autoUnit: true })} input;{' '}
+              {formatNumber(message.content.total_completion_tokens || 0, { autoUnit: true })} completion
+            </span>
+            )
+          </>
+        )}
+      </Badge>
+      {message.content.message && message.content.message !== 'Task completed' && <Markdown className="chat">{message.content.message}</Markdown>}
+      {message.content.reason && <div className="text-muted-foreground text-xs">Reason: {message.content.reason}</div>}
+      {workspace?.warning && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          {workspace.warning}
+          {logCount > 0 && <span className="ml-1">Found {logCount} log file{logCount === 1 ? '' : 's'}.</span>}
+        </div>
       )}
-    </Badge>
+      {pdfCount > 0 && (
+        <div className="text-muted-foreground text-xs">
+          PDF output: {workspace?.pdfs?.slice(0, 3).join(', ')}
+          {pdfCount > 3 ? ` and ${pdfCount - 3} more` : ''}
+        </div>
+      )}
+    </div>
   );
 };
 
 interface TerminatedMessageProps {
-  message: Message<{ total_input_tokens?: number; total_completion_tokens?: number }>;
+  message: Message<{ total_input_tokens?: number; total_completion_tokens?: number; reason?: string; message?: string; detail?: string }>;
 }
 
 const TerminatedMessage = ({ message }: TerminatedMessageProps) => {
   const showTokenCount = message.content.total_input_tokens || message.content.total_completion_tokens;
   return (
-    <Badge className="cursor-pointer font-mono">
-      🚫 Task Terminated By User{' '}
-      {showTokenCount && (
-        <>
-          (
-          <span>
-            {formatNumber(message.content.total_input_tokens || 0, { autoUnit: true })} input;{' '}
-            {formatNumber(message.content.total_completion_tokens || 0, { autoUnit: true })} completion
-          </span>
-          )
-        </>
+    <div className="inline-flex max-w-full flex-col gap-2">
+      <Badge className="font-mono" variant="outline">
+        <CircleStop className="h-3.5 w-3.5 text-amber-500" />
+        Terminated{' '}
+        {showTokenCount && (
+          <>
+            (
+            <span>
+              {formatNumber(message.content.total_input_tokens || 0, { autoUnit: true })} input;{' '}
+              {formatNumber(message.content.total_completion_tokens || 0, { autoUnit: true })} completion
+            </span>
+            )
+          </>
+        )}
+      </Badge>
+      {(message.content.reason || message.content.detail || message.content.message) && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          {message.content.reason || message.content.detail || message.content.message}
+        </div>
       )}
-    </Badge>
+    </div>
   );
 };
 
@@ -69,89 +114,132 @@ const StepMessage = ({ message }: { message: AggregatedMessage & { type: 'agent:
     (msg): msg is Message => 'type' in msg && msg.type === 'agent:lifecycle:step:think:tool:selected',
   ) as (AggregatedMessage & { type: 'agent:lifecycle:step:think:tool:selected' }) | undefined;
 
+  const stepStartMessage = message.messages.find(msg => msg.type === 'agent:lifecycle:step:start') as Message | undefined;
+  const stepCompleteMessage = message.messages.find(msg => msg.type === 'agent:lifecycle:step:complete') as Message | undefined;
+  const stepErrorMessage = message.messages.find(msg => msg.type === 'agent:lifecycle:step:error') as Message | undefined;
+  const stepCount = stepStartMessage?.content?.step || message.step || 0;
+  const isRunning = !stepCompleteMessage && !stepErrorMessage;
+
   return (
-    <div className="group mb-4 space-y-4">
-      {thinkMessage && (
-        <div className="space-y-2">
-          <div className="container mx-auto max-w-4xl">
-            <div className="mb-2 flex items-center justify-between">
-              <div className="text-lg font-bold">✨ Manus</div>
-              <div className="text-xs font-medium text-gray-500 italic opacity-0 transition-opacity duration-300 group-hover:opacity-100 hover:opacity-100">
-                {thinkMessage.createdAt
-                  ? new Date(thinkMessage.createdAt).toLocaleString('zh-CN', {
-                      year: 'numeric',
-                      month: '2-digit',
-                      day: '2-digit',
-                      hour: '2-digit',
-                      minute: '2-digit',
-                      second: '2-digit',
-                    })
-                  : ''}
-              </div>
-            </div>
-            <StepBadge message={message} />
-            <div className="flex flex-col gap-2 space-y-2">
-              {toolSelectedMessage?.content.content && <Markdown className="chat">{toolSelectedMessage?.content.content}</Markdown>}
-              <ToolMessageContent message={message} />
-            </div>
-          </div>
+    <details className="group rounded-md border bg-background/80" open={isRunning}>
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm">
+        <div className="flex min-w-0 items-center gap-2">
+          {isRunning ? <LoaderIcon className="h-3.5 w-3.5 animate-spin text-primary" /> : <CircleCheck className="h-3.5 w-3.5 text-muted-foreground" />}
+          <span className="shrink-0 font-medium">Step {stepCount || ''}</span>
+          <span className="text-muted-foreground truncate">{toolSelectedMessage?.content.content || toolSelectedMessage?.content.tool || 'Thinking'}</span>
         </div>
-      )}
-    </div>
+        <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
+      </summary>
+      <div className="space-y-3 border-t px-3 py-3">
+        <StepBadge message={message} />
+        {toolSelectedMessage?.content.content && <Markdown className="chat text-sm">{toolSelectedMessage.content.content}</Markdown>}
+        <ToolMessageContent message={message} />
+        {stepErrorMessage?.content?.message && <div className="rounded-md border border-destructive/30 bg-destructive/10 p-2 text-sm">{stepErrorMessage.content.message}</div>}
+      </div>
+    </details>
   );
 };
 
 const LifecycleMessage = ({ message }: { message: AggregatedMessage }) => {
   if (!('messages' in message)) return null;
+  const startMessage = message.messages.find(msg => msg.type === 'agent:lifecycle:start') as Message<{ request: string }> | undefined;
+  const completeMessage = message.messages.find(msg => msg.type === 'agent:lifecycle:complete') as CompletionMessageProps['message'] | undefined;
+  const terminatedMessage = message.messages.find(msg => msg.type === 'agent:lifecycle:terminated') as TerminatedMessageProps['message'] | undefined;
+  const stepMessages = message.messages.filter(
+    (msg): msg is AggregatedMessage & { type: 'agent:lifecycle:step' } => msg.type === 'agent:lifecycle:step',
+  );
+  const latestTokenCount = getLatestTokenCount(stepMessages);
+  if (completeMessage && latestTokenCount) {
+    completeMessage.content.total_input_tokens = latestTokenCount.total_input;
+    completeMessage.content.total_completion_tokens = latestTokenCount.total_completion;
+  }
+  if (terminatedMessage && latestTokenCount) {
+    terminatedMessage.content.total_input_tokens = latestTokenCount.total_input;
+    terminatedMessage.content.total_completion_tokens = latestTokenCount.total_completion;
+  }
+  const isRunning = !completeMessage && !terminatedMessage;
+  const assistantText = getAssistantText(stepMessages);
 
   return (
-    <div className="space-y-4">
-      {message.messages.map((msg, index) => {
-        if (!('type' in msg)) return null;
-
-        if (msg.type === 'agent:lifecycle:start') {
-          return (
-            <div key={index} className="container mx-auto flex max-w-4xl justify-end">
-              <UserMessage message={msg as Message<{ request: string }>} />
+    <div className="container mx-auto max-w-4xl space-y-3">
+      {startMessage && <UserMessage message={startMessage} />}
+      <div className="space-y-3">
+        <div className="flex items-start gap-3">
+          <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md border bg-background text-xs font-semibold">M</div>
+          <div className="min-w-0 flex-1 space-y-3">
+            <div className="flex items-center gap-2">
+              <div className="font-semibold">Manus</div>
+              <Badge variant={isRunning ? 'default' : 'outline'} className="font-mono">
+                {isRunning ? 'Working' : terminatedMessage ? 'Stopped' : 'Done'}
+              </Badge>
             </div>
-          );
-        }
-
-        if (msg.type === 'agent:lifecycle:complete') {
-          return (
-            <div key={index} className="container mx-auto max-w-4xl">
-              <CompletionMessage message={msg as Message<{ results: string[]; total_input_tokens: number; total_completion_tokens: number }>} />
-            </div>
-          );
-        }
-
-        if (msg.type === 'agent:lifecycle:terminated') {
-          return (
-            <div key={index} className="container mx-auto max-w-4xl">
-              <TerminatedMessage message={msg} />
-            </div>
-          );
-        }
-
-        if (msg.type === 'agent:lifecycle:step') {
-          return (
-            <div key={index} className="container mx-auto max-w-4xl">
-              <StepMessage message={msg as AggregatedMessage & { type: 'agent:lifecycle:step' }} />
-            </div>
-          );
-        }
-
-        return null;
-      })}
+            {assistantText ? (
+              <Markdown className="chat">{assistantText}</Markdown>
+            ) : (
+              <div className={cn('text-sm text-muted-foreground', isRunning && 'flex items-center gap-2')}>
+                {isRunning && <LoaderIcon className="h-3.5 w-3.5 animate-spin" />}
+                {isRunning ? 'Working on it...' : 'Run finished.'}
+              </div>
+            )}
+            <details className="group rounded-lg border bg-muted/20" open={isRunning}>
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium">Thinking and actions</span>
+                  <span className="text-muted-foreground">{stepMessages.length} step{stepMessages.length === 1 ? '' : 's'}</span>
+                </div>
+                <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform group-open:rotate-180" />
+              </summary>
+              <div className="space-y-2 border-t p-2">
+                {stepMessages.length ? stepMessages.map((step, index) => <StepMessage key={String(step.index || index)} message={step} />) : <div className="p-2 text-sm text-muted-foreground">No trace yet.</div>}
+              </div>
+            </details>
+            {completeMessage && <CompletionMessage message={completeMessage} />}
+            {terminatedMessage && <TerminatedMessage message={terminatedMessage} />}
+          </div>
+        </div>
+      </div>
     </div>
   );
+};
+
+const getLatestTokenCount = (steps: (AggregatedMessage & { type: 'agent:lifecycle:step' })[]) => {
+  for (const step of [...steps].reverse()) {
+    const thinkMessage = step.messages.find(msg => msg.type === 'agent:lifecycle:step:think') as
+      | (AggregatedMessage & { type: 'agent:lifecycle:step:think' })
+      | undefined;
+    const tokenMessages = thinkMessage?.messages.filter((msg): msg is Message => 'type' in msg && msg.type === 'agent:lifecycle:step:think:token:count') || [];
+    const token = tokenMessages[tokenMessages.length - 1];
+    if (token?.content) {
+      return {
+        total_input: Number(token.content.total_input || 0),
+        total_completion: Number(token.content.total_completion || 0),
+      };
+    }
+  }
+  return null;
+};
+
+const getAssistantText = (steps: (AggregatedMessage & { type: 'agent:lifecycle:step' })[]) => {
+  for (const step of [...steps].reverse()) {
+    const thinkMessage = step.messages.find(msg => msg.type === 'agent:lifecycle:step:think') as
+      | (AggregatedMessage & { type: 'agent:lifecycle:step:think' })
+      | undefined;
+    const selected = thinkMessage?.messages.find(
+      (msg): msg is Message => 'type' in msg && msg.type === 'agent:lifecycle:step:think:tool:selected',
+    );
+    const content = String(selected?.content?.content || '').trim();
+    if (content) return content;
+  }
+  return '';
 };
 
 const ChatMessage = ({ message }: { message: AggregatedMessage }) => {
   if (!message.type?.startsWith('agent:lifecycle')) {
     return (
-      <div className="container mx-auto max-w-4xl">
-        <Markdown>{message.content}</Markdown>
+      <div className={cn('container mx-auto flex max-w-4xl', message.role === 'user' ? 'justify-end' : 'justify-start')}>
+        <div className={cn('max-w-[78%]', message.role === 'user' && 'rounded-2xl bg-muted px-4 py-3')}>
+          <Markdown>{message.content}</Markdown>
+        </div>
       </div>
     );
   }

@@ -29,6 +29,11 @@ from app.schema import (
     Message,
     ToolChoice,
 )
+from app.task_context import (
+    emit_current_task,
+    get_current_llm_connection,
+    get_current_model,
+)
 
 
 REASONING_MODELS = ["o1", "o3-mini"]
@@ -226,6 +231,59 @@ class LLM:
 
             self.token_counter = TokenCounter(self.tokenizer)
 
+    @property
+    def active_model(self) -> str:
+        connection = get_current_llm_connection() or {}
+        return get_current_model() or connection.get("model") or self.model
+
+    def active_request_overrides(self) -> dict:
+        connection = get_current_llm_connection() or {}
+        return {
+            key: value
+            for key, value in {
+                "base_url": connection.get("base_url"),
+                "api_key": connection.get("api_key"),
+                "api_type": connection.get("api_type"),
+                "max_tokens": connection.get("max_tokens"),
+                "temperature": connection.get("temperature"),
+            }.items()
+            if value not in (None, "")
+        }
+
+    def active_client(self):
+        overrides = self.active_request_overrides()
+        api_type = overrides.get("api_type", self.api_type)
+        if not overrides:
+            return self.client
+        if api_type == "aws":
+            return BedrockClient()
+        if api_type == "azure":
+            return AsyncAzureOpenAI(
+                base_url=overrides.get("base_url", self.base_url),
+                api_key=overrides.get("api_key", self.api_key),
+                api_version=self.api_version,
+            )
+        return AsyncOpenAI(
+            api_key=overrides.get("api_key", self.api_key),
+            base_url=overrides.get("base_url", self.base_url),
+        )
+
+    def active_max_tokens(self) -> int:
+        overrides = self.active_request_overrides()
+        return int(overrides.get("max_tokens", self.max_tokens))
+
+    def active_temperature(self) -> float:
+        overrides = self.active_request_overrides()
+        return float(overrides.get("temperature", self.temperature))
+
+    def active_base_url(self) -> str:
+        overrides = self.active_request_overrides()
+        return str(overrides.get("base_url", self.base_url) or "")
+
+    def active_api_type(self) -> str:
+        overrides = self.active_request_overrides()
+        return str(overrides.get("api_type", self.api_type) or "")
+
     def count_tokens(self, text: str) -> int:
         """Calculate the number of tokens in a text"""
         if not text:
@@ -240,6 +298,15 @@ class LLM:
         # Only track tokens if max_input_tokens is set
         self.total_input_tokens += input_tokens
         self.total_completion_tokens += completion_tokens
+        emit_current_task(
+            "token_count",
+            {
+                "input": input_tokens,
+                "completion": completion_tokens,
+                "total_input": self.total_input_tokens,
+                "total_completion": self.total_completion_tokens,
+            },
+        )
         logger.info(
             f"Token usage: Input={input_tokens}, Completion={completion_tokens}, "
             f"Cumulative Input={self.total_input_tokens}, Cumulative Completion={self.total_completion_tokens}, "
@@ -351,6 +418,101 @@ class LLM:
 
         return formatted_messages
 
+    @staticmethod
+    def ensure_user_query(messages: List[dict]) -> List[dict]:
+        """Ensure local chat templates always see a user query.
+
+        Some OpenAI-compatible local servers, notably LM Studio templates for
+        tool-capable models, reject requests that contain only system/tool
+        context or end with a tool observation. Keep the transcript intact, but
+        add a small user continuation when needed so those templates have a
+        concrete query to render.
+        """
+        if any(message.get("role") == "user" for message in messages):
+            if messages and messages[-1].get("role") in {"tool", "assistant", "system"}:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Continue from the latest observation. If the task is complete, "
+                            "provide the final answer or call the finish tool with a summary."
+                        ),
+                    }
+                )
+            return messages
+
+        for index in range(len(messages) - 1, -1, -1):
+            if messages[index].get("role") == "system":
+                messages[index] = {**messages[index], "role": "user"}
+                return messages
+
+        messages.append({"role": "user", "content": "Continue."})
+        return messages
+
+    def needs_local_template_compat(self) -> bool:
+        """Return true for OpenAI-compatible local servers with brittle chat templates."""
+        base_url = self.active_base_url().lower()
+        api_type = self.active_api_type().lower()
+        return (
+            api_type in {"ollama", "lmstudio", "local"}
+            or ":1234" in base_url
+            or "localhost" in base_url
+            or "127.0.0.1" in base_url
+            or "lmstudio" in base_url
+        )
+
+    @staticmethod
+    def flatten_tool_history_for_templates(messages: List[dict]) -> List[dict]:
+        """Convert OpenAI tool transcript details into plain chat messages.
+
+        Some local model templates throw "No user query found" when `tool`
+        roles or assistant `tool_calls` appear deep in the history. The model
+        still needs the observations, so keep them as compact user-visible text.
+        """
+        flattened: list[dict] = []
+        for message in messages:
+            role = message.get("role")
+            content = message.get("content") or ""
+
+            if role == "tool":
+                name = message.get("name") or message.get("tool_call_id") or "tool"
+                flattened.append(
+                    {
+                        "role": "user",
+                        "content": f"Tool observation from {name}:\n{content}",
+                    }
+                )
+                continue
+
+            if role == "assistant" and message.get("tool_calls"):
+                if content:
+                    flattened.append({"role": "assistant", "content": content})
+                calls = []
+                for call in message.get("tool_calls") or []:
+                    function = call.get("function") or {}
+                    calls.append(
+                        f"- {function.get('name', 'tool')}({function.get('arguments', '{}')})"
+                    )
+                if calls:
+                    flattened.append(
+                        {
+                            "role": "user",
+                            "content": "Assistant requested these tools:\n"
+                            + "\n".join(calls),
+                        }
+                    )
+                continue
+
+            cleaned = {
+                key: value
+                for key, value in message.items()
+                if key not in {"tool_calls", "tool_call_id", "name"}
+            }
+            if cleaned.get("content") or cleaned.get("role") == "system":
+                flattened.append(cleaned)
+
+        return flattened
+
     @retry(
         wait=wait_random_exponential(min=1, max=60),
         stop=stop_after_attempt(6),
@@ -385,7 +547,8 @@ class LLM:
         """
         try:
             # Check if the model supports images
-            supports_images = self.model in MULTIMODAL_MODELS
+            model = self.active_model
+            supports_images = model in MULTIMODAL_MODELS
 
             # Format system and user messages with image support check
             if system_msgs:
@@ -404,21 +567,23 @@ class LLM:
                 raise TokenLimitExceeded(error_message)
 
             params = {
-                "model": self.model,
+                "model": model,
                 "messages": messages,
             }
 
-            if self.model in REASONING_MODELS:
-                params["max_completion_tokens"] = self.max_tokens
+            if model in REASONING_MODELS:
+                params["max_completion_tokens"] = self.active_max_tokens()
             else:
-                params["max_tokens"] = self.max_tokens
+                params["max_tokens"] = self.active_max_tokens()
                 params["temperature"] = (
-                    temperature if temperature is not None else self.temperature
+                    temperature
+                    if temperature is not None
+                    else self.active_temperature()
                 )
 
             if not stream:
                 # Non-streaming request
-                response = await self.client.chat.completions.create(
+                response = await self.active_client().chat.completions.create(
                     **params, stream=False
                 )
 
@@ -435,7 +600,9 @@ class LLM:
             # Streaming request, For streaming, update estimated token count before making the request
             self.update_token_count(input_tokens)
 
-            response = await self.client.chat.completions.create(**params, stream=True)
+            response = await self.active_client().chat.completions.create(
+                **params, stream=True
+            )
 
             collected_messages = []
             completion_text = ""
@@ -455,7 +622,7 @@ class LLM:
             logger.info(
                 f"Estimated completion tokens for streaming response: {completion_tokens}"
             )
-            self.total_completion_tokens += completion_tokens
+            self.update_token_count(0, completion_tokens)
 
             return full_response
 
@@ -515,9 +682,10 @@ class LLM:
         try:
             # For ask_with_images, we always set supports_images to True because
             # this method should only be called with models that support images
-            if self.model not in MULTIMODAL_MODELS:
+            model = self.active_model
+            if model not in MULTIMODAL_MODELS:
                 raise ValueError(
-                    f"Model {self.model} does not support images. Use a model from {MULTIMODAL_MODELS}"
+                    f"Model {model} does not support images. Use a model from {MULTIMODAL_MODELS}"
                 )
 
             # Format messages with image support
@@ -574,33 +742,37 @@ class LLM:
 
             # Set up API parameters
             params = {
-                "model": self.model,
+                "model": model,
                 "messages": all_messages,
                 "stream": stream,
             }
 
             # Add model-specific parameters
-            if self.model in REASONING_MODELS:
-                params["max_completion_tokens"] = self.max_tokens
+            if model in REASONING_MODELS:
+                params["max_completion_tokens"] = self.active_max_tokens()
             else:
-                params["max_tokens"] = self.max_tokens
+                params["max_tokens"] = self.active_max_tokens()
                 params["temperature"] = (
-                    temperature if temperature is not None else self.temperature
+                    temperature
+                    if temperature is not None
+                    else self.active_temperature()
                 )
 
             # Handle non-streaming request
             if not stream:
-                response = await self.client.chat.completions.create(**params)
+                response = await self.active_client().chat.completions.create(**params)
 
                 if not response.choices or not response.choices[0].message.content:
                     raise ValueError("Empty or invalid response from LLM")
 
-                self.update_token_count(response.usage.prompt_tokens)
+                self.update_token_count(
+                    response.usage.prompt_tokens, response.usage.completion_tokens
+                )
                 return response.choices[0].message.content
 
             # Handle streaming request
             self.update_token_count(input_tokens)
-            response = await self.client.chat.completions.create(**params)
+            response = await self.active_client().chat.completions.create(**params)
 
             collected_messages = []
             async for chunk in response:
@@ -678,7 +850,8 @@ class LLM:
                 raise ValueError(f"Invalid tool_choice: {tool_choice}")
 
             # Check if the model supports images
-            supports_images = self.model in MULTIMODAL_MODELS
+            model = self.active_model
+            supports_images = model in MULTIMODAL_MODELS
 
             # Format messages
             if system_msgs:
@@ -686,6 +859,11 @@ class LLM:
                 messages = system_msgs + self.format_messages(messages, supports_images)
             else:
                 messages = self.format_messages(messages, supports_images)
+
+            messages = self.ensure_user_query(messages)
+            if self.needs_local_template_compat():
+                messages = self.flatten_tool_history_for_templates(messages)
+                messages = self.ensure_user_query(messages)
 
             # Calculate input token count
             input_tokens = self.count_message_tokens(messages)
@@ -712,7 +890,7 @@ class LLM:
 
             # Set up the completion request
             params = {
-                "model": self.model,
+                "model": model,
                 "messages": messages,
                 "tools": tools,
                 "tool_choice": tool_choice,
@@ -720,17 +898,19 @@ class LLM:
                 **kwargs,
             }
 
-            if self.model in REASONING_MODELS:
-                params["max_completion_tokens"] = self.max_tokens
+            if model in REASONING_MODELS:
+                params["max_completion_tokens"] = self.active_max_tokens()
             else:
-                params["max_tokens"] = self.max_tokens
+                params["max_tokens"] = self.active_max_tokens()
                 params["temperature"] = (
-                    temperature if temperature is not None else self.temperature
+                    temperature
+                    if temperature is not None
+                    else self.active_temperature()
                 )
 
             params["stream"] = False  # Always use non-streaming for tool requests
-            response: ChatCompletion = await self.client.chat.completions.create(
-                **params
+            response: ChatCompletion = (
+                await self.active_client().chat.completions.create(**params)
             )
 
             # Check if response is valid

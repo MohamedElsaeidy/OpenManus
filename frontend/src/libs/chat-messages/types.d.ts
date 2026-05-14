@@ -1,6 +1,8 @@
 type AgentLifecycleStepActToolType =
   | 'agent:lifecycle:step:act:tool:start'
   | 'agent:lifecycle:step:act:tool:execute:start'
+  | 'agent:lifecycle:step:act:tool:terminal:output'
+  | 'agent:lifecycle:step:act:tool:file:updated'
   | 'agent:lifecycle:step:act:tool:execute:complete'
   | 'agent:lifecycle:step:act:tool:complete'
   | 'agent:lifecycle:step:act:tool:error';
@@ -68,7 +70,7 @@ type AggregatedMessageType =
  * agent:step:complete
  */
 export type Message<T = any> = {
-  index?: number;
+  index?: number | string;
   role: 'user' | 'assistant';
   createdAt?: Date;
   type?: AgentLifecycleType;

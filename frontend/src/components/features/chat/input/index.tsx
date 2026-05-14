@@ -18,7 +18,7 @@ export const ChatInput = ({ taskId, status = 'idle', onSubmit, onTerminate }: Ch
   const handleKeyDown = async (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      if (status === 'thinking' || status === 'terminating' || !value.trim()) {
+      if (status === 'terminating' || !value.trim()) {
         return;
       }
       await onSubmit?.({ taskId, prompt: value.trim() });
@@ -27,7 +27,8 @@ export const ChatInput = ({ taskId, status = 'idle', onSubmit, onTerminate }: Ch
   };
 
   const handleSendClick = async () => {
-    if (status === 'thinking' || status === 'terminating') {
+    const v = value.trim();
+    if ((status === 'thinking' && !v) || status === 'terminating') {
       confirm({
         content: (
           <DialogHeader>
@@ -46,7 +47,6 @@ export const ChatInput = ({ taskId, status = 'idle', onSubmit, onTerminate }: Ch
       });
       return;
     }
-    const v = value.trim();
     if (v) {
       await onSubmit?.({ prompt: v });
       setValue('');
@@ -74,15 +74,15 @@ export const ChatInput = ({ taskId, status = 'idle', onSubmit, onTerminate }: Ch
             value={value}
             onChange={e => setValue(e.target.value)}
             onKeyDown={handleKeyDown}
-            disabled={status === 'thinking' || status === 'terminating'}
+            disabled={status === 'terminating'}
             placeholder={
               status === 'thinking'
-                ? 'Thinking...'
+                ? 'Send a message to the agent'
                 : status === 'terminating'
                   ? 'Terminating...'
                   : status === 'completed'
-                    ? 'Task completed!'
-                    : 'No fortress, purely open ground. OpenManus is Coming.'
+                    ? 'Send a follow-up in this conversation'
+                    : 'Send message to Manus'
             }
             className="min-h-[80px] flex-1 resize-none border-none bg-transparent px-4 py-3 shadow-none outline-none focus-visible:ring-0 focus-visible:ring-offset-0 dark:bg-transparent"
           />
@@ -95,10 +95,10 @@ export const ChatInput = ({ taskId, status = 'idle', onSubmit, onTerminate }: Ch
                 variant="ghost"
                 className="h-8 w-8 cursor-pointer rounded-xl"
                 onClick={handleSendClick}
-                disabled={status !== 'idle' && status !== 'completed' && !(status === 'thinking' || status === 'terminating')}
-                aria-label={status === 'thinking' || status === 'terminating' ? 'Terminate task' : 'Send message'}
+                disabled={status === 'terminating'}
+                aria-label={status === 'thinking' && !value.trim() ? 'Terminate task' : 'Send message'}
               >
-                {status === 'thinking' || status === 'terminating' ? <PauseCircle className="h-4 w-4" /> : <Send className="h-4 w-4" />}
+                {status === 'thinking' && !value.trim() ? <PauseCircle className="h-4 w-4" /> : <Send className="h-4 w-4" />}
               </Button>
             </div>
           </div>

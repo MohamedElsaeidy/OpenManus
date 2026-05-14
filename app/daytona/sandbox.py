@@ -38,8 +38,15 @@ if daytona_config.target:
 else:
     logger.warning("No Daytona target found in environment variables")
 
-daytona = Daytona(daytona_config)
-logger.info("Daytona client initialized")
+daytona = None
+if daytona_config.api_key and daytona_config.api_key != "placeholder":
+    try:
+        daytona = Daytona(daytona_config)
+        logger.info("Daytona client initialized")
+    except Exception as e:
+        logger.error(f"Failed to initialize Daytona client: {e}")
+else:
+    logger.info("Daytona client not initialized (no valid API key)")
 
 
 async def get_or_start_sandbox(sandbox_id: str):

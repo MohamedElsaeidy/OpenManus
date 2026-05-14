@@ -94,14 +94,15 @@ temperature = 0.0                          # Controls randomness for vision mode
 
 
 ## Sandbox configuration
-#[sandbox]
-#use_sandbox = false
-#image = "python:3.12-slim"
-#work_dir = "/workspace"
-#memory_limit = "1g"  # 512m
-#cpu_limit = 2.0
-#timeout = 300
-#network_enabled = true
+[sandbox]
+use_sandbox = true
+image = "openmanus-worker:latest"
+work_dir = "/workspace"
+memory_limit = "2g"
+cpu_limit = 2.0
+timeout = 300
+network_enabled = true
+docker_socket_enabled = true
 
 # MCP (Model Context Protocol) configuration
 [mcp]
@@ -111,3 +112,17 @@ server_reference = "app.mcp.server" # default server module reference
 # Your can add additional agents into run-flow workflow to solve different-type tasks.
 [runflow]
 use_data_analysis_agent = false     # The Data Analysi Agent to solve various data analysis tasks
+
+# Agent configuration
+[agent]
+# Maximum number of steps the agent can take
+max_steps = 160
+# Maximum number of tool calls allowed in a single step
+max_tools_per_step = 6
+
+# Optional RL policy integration
+[rl]
+enabled = false
+policy_mode = "base" # "base" or "rl"
+policy_path = "research/openmanus-rl/artifacts/policy/latest/policy.md"
+metadata_path = "research/openmanus-rl/artifacts/policy/latest/metadata.json"

@@ -1,19 +1,27 @@
 import asyncio
 import json
+import re
 from typing import Any, List, Optional, Union
 
 from pydantic import Field
 
 from app.agent.base import Task, TaskInterrupted
 from app.agent.react import ReActAgent
+from app.config import config
 from app.exceptions import TokenLimitExceeded
 from app.prompt.toolcall import NEXT_STEP_PROMPT, SYSTEM_PROMPT
 from app.schema import TOOL_CHOICE_TYPE, AgentState, Message, ToolCall, ToolChoice
+from app.task_context import current_tool_call
 from app.tool import CreateChatCompletion, Terminate, ToolCollection
+from app.tool.browser_use_tool import BrowserUseTool
 from context.engine import ContextEngine
 
 
 TOOL_CALL_REQUIRED = "Tool calls required but none provided"
+INCOMPLETE_RESPONSE_RE = re.compile(
+    r"\b(let me|i(?:'| a)m going to|next i(?:'| a)ll|i(?:'| a)ll now|continuing|to debug|to inspect|to verify)\b",
+    re.IGNORECASE,
+)
 
 
 class ToolCallAgent(ReActAgent):
@@ -33,9 +41,21 @@ class ToolCallAgent(ReActAgent):
 
     tool_calls: List[ToolCall] = Field(default_factory=list)
     _current_base64_image: Optional[str] = None
+    _last_assistant_content: str = ""
 
-    max_steps: int = 30
+    max_steps: int = config.agent.max_steps
+    max_tools_per_step: int = config.agent.max_tools_per_step
     max_observe: Optional[Union[int, bool]] = None
+    parallel_safe_tools: set[str] = Field(
+        default_factory=lambda: {
+            "skill_playbook",
+            "codebase_overview",
+            "glob",
+            "grep",
+            "read_files",
+            "web_search",
+        }
+    )
 
     async def think(self, task: Task) -> bool:
         """Process current state and decide next actions using tools."""
@@ -90,7 +110,20 @@ class ToolCallAgent(ReActAgent):
         self.tool_calls = tool_calls = (
             response.tool_calls if response and response.tool_calls else []
         )
+        if len(tool_calls) > self.max_tools_per_step:
+            tool_calls = tool_calls[: self.max_tools_per_step]
+            self.tool_calls = tool_calls
+            task.emit(
+                "warning",
+                {
+                    "message": (
+                        f"Tool call batch trimmed to {self.max_tools_per_step} calls "
+                        "to protect runtime stability."
+                    )
+                },
+            )
         content = response.content if response and response.content else ""
+        self._last_assistant_content = content.strip()
 
         task.emit(
             "thought",
@@ -99,6 +132,19 @@ class ToolCallAgent(ReActAgent):
                 "content": content,
                 "tool_count": len(tool_calls) if tool_calls else 0,
                 "tools": [call.function.name for call in tool_calls]
+                if tool_calls
+                else [],
+                "tool_calls": [
+                    {
+                        "id": call.id,
+                        "type": "function",
+                        "function": {
+                            "name": call.function.name,
+                            "arguments": call.function.arguments,
+                        },
+                    }
+                    for call in tool_calls
+                ]
                 if tool_calls
                 else [],
                 "arguments": tool_calls[0].function.arguments if tool_calls else None,
@@ -133,6 +179,31 @@ class ToolCallAgent(ReActAgent):
                 return True  # Will be handled in act()
 
             if self.tool_choices == ToolChoice.AUTO and not self.tool_calls:
+                if content.strip():
+                    if self._looks_incomplete_response(content):
+                        # The model produced a continuation sentence without tool calls.
+                        # Keep the run alive and ask for an actionable next step.
+                        task.emit(
+                            "warning",
+                            {
+                                "message": "Model returned a non-final continuation without tool calls; requesting explicit completion or next action."
+                            },
+                        )
+                        self.memory.add_message(
+                            Message.user_message(
+                                "Continue autonomously: either call the next tool(s) now, "
+                                "or provide a final summary of what happened, what worked, and what remains."
+                            )
+                        )
+                        return True
+                    task.emit(
+                        "final_response",
+                        {
+                            "message": content.strip(),
+                            "reason": "Model provided a final answer without requesting another tool.",
+                        },
+                    )
+                    self.state = AgentState.FINISHED
                 return bool(content)
 
             return bool(self.tool_calls)
@@ -151,6 +222,15 @@ class ToolCallAgent(ReActAgent):
             )
             return False
 
+    @staticmethod
+    def _looks_incomplete_response(content: str) -> bool:
+        text = (content or "").strip()
+        if not text:
+            return False
+        if "?" in text:
+            return True
+        return bool(INCOMPLETE_RESPONSE_RE.search(text))
+
     async def act(self, task: Task) -> str:
         """Execute tool calls and handle their results."""
         if task.is_interrupted():
@@ -163,14 +243,49 @@ class ToolCallAgent(ReActAgent):
             return self.messages[-1].content or "No content or commands to execute"
 
         results = []
-        for command in self.tool_calls:
+        index = 0
+        while index < len(self.tool_calls):
             if task.is_interrupted():
                 raise TaskInterrupted()
 
+            command = self.tool_calls[index]
+            if self._is_parallel_safe(command):
+                batch = [command]
+                next_index = index + 1
+                while next_index < len(self.tool_calls) and self._is_parallel_safe(
+                    self.tool_calls[next_index]
+                ):
+                    batch.append(self.tool_calls[next_index])
+                    next_index += 1
+
+                batch_results = await asyncio.gather(
+                    *(self.execute_tool(item, task) for item in batch)
+                )
+                for item, result in zip(batch, batch_results):
+                    if self.max_observe:
+                        result = result[: self.max_observe]
+                    task.emit(
+                        "tool_result",
+                        {
+                            "tool": item.function.name,
+                            "result": result,
+                            "tool_call_id": item.id,
+                        },
+                    )
+                    self.memory.add_message(
+                        Message.tool_message(
+                            content=result,
+                            tool_call_id=item.id,
+                            name=item.function.name,
+                            base64_image=self._current_base64_image,
+                        )
+                    )
+                    results.append(result)
+                index = next_index
+                continue
+
             self._current_base64_image = None
-
             result = await self.execute_tool(command, task)
-
             if self.max_observe:
                 result = result[: self.max_observe]
 
@@ -182,17 +297,22 @@ class ToolCallAgent(ReActAgent):
                     "tool_call_id": command.id,
                 },
             )
-
-            tool_msg = Message.tool_message(
-                content=result,
-                tool_call_id=command.id,
-                name=command.function.name,
-                base64_image=self._current_base64_image,
+            self.memory.add_message(
+                Message.tool_message(
+                    content=result,
+                    tool_call_id=command.id,
+                    name=command.function.name,
+                    base64_image=self._current_base64_image,
+                )
             )
-            self.memory.add_message(tool_msg)
             results.append(result)
+            index += 1
 
         return "\n\n".join(results)
+
+    def _is_parallel_safe(self, command: ToolCall) -> bool:
+        name = (command.function.name or "").lower()
+        return name in self.parallel_safe_tools
 
     async def execute_tool(self, command: ToolCall, task: Task) -> str:
         """Execute a single tool call with robust error handling."""
@@ -209,7 +329,28 @@ class ToolCallAgent(ReActAgent):
         try:
             args = json.loads(command.function.arguments or "{}")
 
-            result = await self.available_tools.execute(name=name, tool_input=args)
+            token = current_tool_call.set({"id": command.id, "name": name})
+            try:
+                result = await self.available_tools.execute(name=name, tool_input=args)
+            finally:
+                current_tool_call.reset(token)
+
+            if name == BrowserUseTool().name:
+                browser_screenshot = await self._emit_browser_screenshot(task)
+                if browser_screenshot:
+                    self._current_base64_image = browser_screenshot
+
+            if name == "str_replace_editor" and isinstance(args, dict):
+                path = args.get("path")
+                if path:
+                    task.emit(
+                        "workspace_file_updated",
+                        {
+                            "tool_call_id": command.id,
+                            "tool": name,
+                            "path": str(path),
+                        },
+                    )
 
             await self._handle_special_tool(task=task, name=name, result=result)
 
@@ -241,15 +382,45 @@ class ToolCallAgent(ReActAgent):
             )
             return f"Error: {error_msg}"
 
+    async def _emit_browser_screenshot(self, task: Task) -> Optional[str]:
+        browser_tool = self.available_tools.get_tool(BrowserUseTool().name)
+        if browser_tool is None or not hasattr(browser_tool, "get_current_state"):
+            return None
+
+        state_result = await browser_tool.get_current_state()
+        screenshot = getattr(state_result, "base64_image", None)
+        if not screenshot:
+            return None
+
+        url = ""
+        title = ""
+        try:
+            state = json.loads(state_result.output or "{}")
+            url = state.get("url", "")
+            title = state.get("title", "")
+        except Exception:
+            pass
+
+        task.emit(
+            "browser_screenshot",
+            {"screenshot": screenshot, "url": url, "title": title},
+        )
+        return screenshot
+
     async def _handle_special_tool(self, task: Task, name: str, result: Any, **kwargs):
         """Handle special tool execution and state changes."""
         if not self._is_special_tool(name):
             return
 
         if self._should_finish_execution(name=name, result=result, **kwargs):
+            summary = self._last_assistant_content or str(result)
             task.emit(
                 "finish_signal",
-                {"tool": name, "message": "Special tool signaled completion."},
+                {
+                    "tool": name,
+                    "message": summary,
+                    "reason": "Finish tool signaled completion.",
+                },
             )
             self.state = AgentState.FINISHED
 

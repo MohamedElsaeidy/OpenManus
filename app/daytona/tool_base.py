@@ -19,7 +19,15 @@ daytona_config = DaytonaConfig(
     server_url=daytona_settings.daytona_server_url,
     target=daytona_settings.daytona_target,
 )
-daytona = Daytona(daytona_config)
+daytona = None
+if daytona_config.api_key and daytona_config.api_key != "placeholder":
+    try:
+        daytona = Daytona(daytona_config)
+        logger.info("Daytona client initialized")
+    except Exception as e:
+        logger.error(f"Failed to initialize Daytona client: {e}")
+else:
+    logger.info("Daytona client not initialized (no valid API key)")
 
 
 @dataclass
