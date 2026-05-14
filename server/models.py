@@ -90,6 +90,47 @@ class AppSettingORM(Base):
     )
 
 
+class ObsidianNoteORM(Base):
+    __tablename__ = "obsidian_notes"
+
+    note_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    conversation_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("conversations.conversation_id"),
+        nullable=False,
+        index=True,
+    )
+    path = Column(String, nullable=False, index=True)
+    title = Column(String, nullable=False, index=True)
+    content = Column(String, nullable=False, default="")
+    tags = Column(JSONB, nullable=False, default=list)
+    meta = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ObsidianEdgeORM(Base):
+    __tablename__ = "obsidian_edges"
+
+    edge_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    conversation_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("conversations.conversation_id"),
+        nullable=False,
+        index=True,
+    )
+    source_note_id = Column(
+        UUID(as_uuid=True), ForeignKey("obsidian_notes.note_id"), nullable=False, index=True
+    )
+    target_note_id = Column(
+        UUID(as_uuid=True), ForeignKey("obsidian_notes.note_id"), nullable=False, index=True
+    )
+    relation = Column(String, nullable=False, default="wikilink")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
 __all__ = [
     "Base",
     "TaskORM",
@@ -98,4 +139,6 @@ __all__ = [
     "ConversationORM",
     "ConversationEventORM",
     "AppSettingORM",
+    "ObsidianNoteORM",
+    "ObsidianEdgeORM",
 ]

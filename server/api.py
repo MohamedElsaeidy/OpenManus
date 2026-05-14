@@ -4,6 +4,7 @@ import json
 import os
 import secrets
 import shutil
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -29,6 +30,8 @@ from server.models import (
     AppSettingORM,
     ConversationEventORM,
     ConversationORM,
+    ObsidianEdgeORM,
+    ObsidianNoteORM,
     SessionORM,
     TaskORM,
     UserORM,
@@ -110,6 +113,7 @@ _ensure_schema_updates()
 
 
 TERMINAL_STATUSES = {"COMPLETED", "FAILED", "INTERRUPTED"}
+WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:[^\]]*)\]\]")
 
 
 # ---------------------------------------------------------------------------
@@ -213,12 +217,51 @@ def _conversation_to_dict(session, conversation: ConversationORM) -> dict:
         .first()
     )
     latest_status = latest_task.status if latest_task else None
+    settings = conversation.settings or {}
+    requested_context_window = settings.get("requested_context_window")
+    auto_context_compress = settings.get("auto_context_compress", True)
+    if requested_context_window not in (None, ""):
+        try:
+            requested_context_window = int(requested_context_window)
+        except (TypeError, ValueError):
+            requested_context_window = None
+    current_input = 0
+    if latest_task is not None:
+        latest_token_event = (
+            session.query(ConversationEventORM)
+            .filter(
+                ConversationEventORM.task_id == latest_task.task_id,
+                ConversationEventORM.event_type == "token_count",
+            )
+            .order_by(desc(ConversationEventORM.created_at))
+            .first()
+        )
+        if latest_token_event is not None:
+            payload = latest_token_event.payload or {}
+            current_input = payload.get("total_input") or payload.get("input") or 0
+            try:
+                current_input = int(current_input)
+            except (TypeError, ValueError):
+                current_input = 0
+    ratio = (
+        round(current_input / requested_context_window, 4)
+        if requested_context_window and requested_context_window > 0
+        else None
+    )
+    latest_context = {
+        "requested_window": requested_context_window,
+        "current_input_tokens": current_input,
+        "usage_ratio": ratio,
+        "is_near_limit": bool(ratio is not None and ratio >= 0.9),
+        "auto_context_compress": bool(auto_context_compress),
+    }
     return {
         "id": str(conversation.conversation_id),
         "conversation_id": str(conversation.conversation_id),
         "title": conversation.title,
         "model": conversation.model,
-        "settings": conversation.settings or {},
+        "settings": settings,
+        "context": latest_context,
         "latest_task_id": str(latest_task.task_id) if latest_task else None,
         "latest_status": latest_status,
         "state": CONVERSATION_STATES.get(str(latest_status or ""), "idle"),
@@ -444,6 +487,55 @@ def _task_belongs_to_user(session, orm: TaskORM, user_id: uuid.UUID) -> bool:
     return conversation is not None and conversation.user_id == user_id
 
 
+def _extract_wikilinks(content: str) -> list[str]:
+    if not content:
+        return []
+    out: list[str] = []
+    for match in WIKILINK_RE.findall(content):
+        normalized = str(match).strip()
+        if normalized:
+            out.append(normalized)
+    return out
+
+
+def _obsidian_graph_payload(session, conversation: ConversationORM) -> dict:
+    notes = (
+        session.query(ObsidianNoteORM)
+        .filter(ObsidianNoteORM.conversation_id == conversation.conversation_id)
+        .all()
+    )
+    edges = (
+        session.query(ObsidianEdgeORM)
+        .filter(ObsidianEdgeORM.conversation_id == conversation.conversation_id)
+        .all()
+    )
+    node_payload = [
+        {
+            "id": str(note.note_id),
+            "path": note.path,
+            "title": note.title,
+            "tags": note.tags or [],
+            "updated_at": note.updated_at.isoformat() if note.updated_at else None,
+        }
+        for note in notes
+    ]
+    edge_payload = [
+        {
+            "id": str(edge.edge_id),
+            "source": str(edge.source_note_id),
+            "target": str(edge.target_note_id),
+            "relation": edge.relation,
+        }
+        for edge in edges
+    ]
+    return {
+        "nodes": node_payload,
+        "edges": edge_payload,
+        "node_count": len(node_payload),
+        "edge_count": len(edge_payload),
+    }
+
+
 def _agent_event_to_progress(event: dict) -> list[dict]:
     """
     Convert one internal agent event into one or more SSE progress messages
@@ -463,6 +555,7 @@ def _agent_event_to_progress(event: dict) -> list[dict]:
       terminated     → agent:lifecycle:terminated
       browser_screenshot → agent:lifecycle:step:think:browser:browse:complete
       token_count    → agent:lifecycle:step:think:token:count
+      context_compressed → agent:lifecycle:step:think:context:compressed
       terminal_output → agent:lifecycle:step:act:tool:terminal:output
       workspace_file_updated → agent:lifecycle:step:act:tool:file:updated
       error          → agent:lifecycle:step:error
@@ -569,6 +662,9 @@ def _agent_event_to_progress(event: dict) -> list[dict]:
     if agent_type == "token_count":
         return [_msg("agent:lifecycle:step:think:token:count", data)]
 
+    if agent_type == "context_compressed":
+        return [_msg("agent:lifecycle:step:think:context:compressed", data)]
+
     if agent_type == "terminal_output":
         return [_msg("agent:lifecycle:step:act:tool:terminal:output", data)]
 
@@ -609,6 +705,8 @@ def _task_input(
     parent_task_id: Optional[str] = None,
     model: Optional[str] = None,
     disabled_tools: Optional[list[str]] = None,
+    requested_context_window: Optional[int] = None,
+    auto_context_compress: Optional[bool] = None,
 ) -> dict:
     data = {"conversation_id": conversation_id}
     if prompt:
@@ -619,6 +717,10 @@ def _task_input(
         data["model"] = model
     if disabled_tools:
         data["disabled_tools"] = disabled_tools
+    if requested_context_window and requested_context_window > 0:
+        data["requested_context_window"] = int(requested_context_window)
+    if auto_context_compress is not None:
+        data["auto_context_compress"] = bool(auto_context_compress)
     return data
 
 
@@ -1153,6 +1255,131 @@ async def get_conversation_event_history(
     }
 
 
+@app.post("/api/conversations/{conversation_id}/obsidian/import")
+async def import_obsidian_context(request: Request, conversation_id: str):
+    """Import Obsidian notes and build a wikilink graph for this conversation."""
+    user = _require_user(request)
+    body = await request.json()
+    notes = body.get("notes") or []
+    if not isinstance(notes, list) or not notes:
+        raise HTTPException(status_code=400, detail="notes[] is required")
+
+    with registry.SessionLocal() as session:
+        conversation = _require_conversation(session, user.user_id, conversation_id)
+        cid = conversation.conversation_id
+        existing = (
+            session.query(ObsidianNoteORM)
+            .filter(ObsidianNoteORM.conversation_id == cid)
+            .all()
+        )
+        by_path = {note.path: note for note in existing}
+        by_title = {note.title: note for note in existing}
+
+        upserted: list[ObsidianNoteORM] = []
+        for raw in notes:
+            if not isinstance(raw, dict):
+                continue
+            path = str(raw.get("path") or raw.get("title") or "").strip()
+            title = str(raw.get("title") or Path(path).stem or "").strip()
+            content = str(raw.get("content") or "")
+            tags = raw.get("tags") if isinstance(raw.get("tags"), list) else []
+            meta = raw.get("meta") if isinstance(raw.get("meta"), dict) else {}
+            if not path or not title:
+                continue
+            note = by_path.get(path)
+            if note is None:
+                note = ObsidianNoteORM(
+                    conversation_id=cid,
+                    path=path,
+                    title=title,
+                    content=content,
+                    tags=tags,
+                    meta=meta,
+                )
+                session.add(note)
+            else:
+                note.title = title
+                note.content = content
+                note.tags = tags
+                note.meta = meta
+            upserted.append(note)
+            by_path[path] = note
+            by_title[title] = note
+
+        session.flush()
+
+        session.query(ObsidianEdgeORM).filter(
+            ObsidianEdgeORM.conversation_id == cid
+        ).delete()
+
+        edges_created = 0
+        for note in upserted:
+            for target_name in _extract_wikilinks(note.content):
+                target = by_title.get(target_name) or by_path.get(target_name)
+                if target is None:
+                    continue
+                session.add(
+                    ObsidianEdgeORM(
+                        conversation_id=cid,
+                        source_note_id=note.note_id,
+                        target_note_id=target.note_id,
+                        relation="wikilink",
+                    )
+                )
+                edges_created += 1
+
+        conversation.updated_at = _now()
+        session.commit()
+
+        payload = _obsidian_graph_payload(session, conversation)
+        return {
+            "conversation_id": conversation_id,
+            "imported_notes": len(upserted),
+            "edges_created": edges_created,
+            "graph": payload,
+        }
+
+
+@app.get("/api/conversations/{conversation_id}/obsidian/graph")
+async def get_obsidian_graph(request: Request, conversation_id: str):
+    user = _require_user(request)
+    with registry.SessionLocal() as session:
+        conversation = _require_conversation(session, user.user_id, conversation_id)
+        return {
+            "conversation_id": conversation_id,
+            **_obsidian_graph_payload(session, conversation),
+        }
+
+
+@app.get("/api/conversations/{conversation_id}/obsidian/context")
+async def get_obsidian_context(request: Request, conversation_id: str, limit: int = 8):
+    user = _require_user(request)
+    with registry.SessionLocal() as session:
+        conversation = _require_conversation(session, user.user_id, conversation_id)
+        notes = (
+            session.query(ObsidianNoteORM)
+            .filter(ObsidianNoteORM.conversation_id == conversation.conversation_id)
+            .order_by(ObsidianNoteORM.updated_at.desc())
+            .limit(max(1, min(limit, 30)))
+            .all()
+        )
+    items = []
+    for note in notes:
+        content = (note.content or "").strip()
+        if len(content) > 900:
+            content = content[:900] + "..."
+        items.append(
+            {
+                "id": str(note.note_id),
+                "path": note.path,
+                "title": note.title,
+                "tags": note.tags or [],
+                "content": content,
+            }
+        )
+    return {"conversation_id": conversation_id, "notes": items, "count": len(items)}
+
+
 @app.get("/api/conversations/{conversation_id}/events/count")
 async def get_conversation_event_count(request: Request, conversation_id: str):
     user = _require_user(request)
@@ -1323,6 +1550,26 @@ async def update_conversation_settings(request: Request, conversation_id: str):
                 for name in body.get("disabled_tools", [])
                 if str(name) != "terminate"
             ]
+        if "requested_context_window" in body:
+            raw_window = body.get("requested_context_window")
+            if raw_window in (None, "", 0):
+                settings.pop("requested_context_window", None)
+            else:
+                try:
+                    value = int(raw_window)
+                except (TypeError, ValueError):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="requested_context_window must be a positive integer",
+                    )
+                if value <= 0:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="requested_context_window must be a positive integer",
+                    )
+                settings["requested_context_window"] = value
+        if "auto_context_compress" in body:
+            settings["auto_context_compress"] = bool(body.get("auto_context_compress"))
         conversation.settings = settings
         conversation.updated_at = _now()
         session.commit()
@@ -1598,6 +1845,12 @@ async def create_task(
                 disabled_tools = list(
                     (conversation_settings or {}).get("disabled_tools", [])
                 )
+                requested_context_window = (conversation_settings or {}).get(
+                    "requested_context_window"
+                )
+                auto_context_compress = (conversation_settings or {}).get(
+                    "auto_context_compress", True
+                )
                 if conversation is not None:
                     conversation.updated_at = _now()
                     session.commit()
@@ -1609,6 +1862,8 @@ async def create_task(
                         parent_task_id=task_id,
                         model=run_model,
                         disabled_tools=disabled_tools,
+                        requested_context_window=requested_context_window,
+                        auto_context_compress=auto_context_compress,
                     )
                 )
                 task.status = TaskStatus.CREATED
@@ -1649,6 +1904,12 @@ async def create_task(
             conversation.model = model
         run_model = model or conversation.model
         disabled_tools = list((conversation.settings or {}).get("disabled_tools", []))
+        requested_context_window = (conversation.settings or {}).get(
+            "requested_context_window"
+        )
+        auto_context_compress = (conversation.settings or {}).get(
+            "auto_context_compress", True
+        )
         conversation.updated_at = _now()
         session.commit()
         conversation_id = str(conversation.conversation_id)
@@ -1660,6 +1921,8 @@ async def create_task(
             conversation_id,
             model=run_model,
             disabled_tools=disabled_tools,
+            requested_context_window=requested_context_window,
+            auto_context_compress=auto_context_compress,
         ),
     )
     task.status = TaskStatus.CREATED
@@ -1749,6 +2012,12 @@ async def send_conversation_message(request: Request, conversation_id: str):
             disabled_tools = list(
                 (conversation.settings or {}).get("disabled_tools", [])
             )
+            requested_context_window = (conversation.settings or {}).get(
+                "requested_context_window"
+            )
+            auto_context_compress = (conversation.settings or {}).get(
+                "auto_context_compress", True
+            )
             conversation.updated_at = _now()
             session.commit()
 
@@ -1771,6 +2040,8 @@ async def send_conversation_message(request: Request, conversation_id: str):
             conversation_id,
             model=run_model,
             disabled_tools=disabled_tools,
+            requested_context_window=requested_context_window,
+            auto_context_compress=auto_context_compress,
         )
     )
     task.status = TaskStatus.CREATED

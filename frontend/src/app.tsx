@@ -25,6 +25,7 @@ import HomePage from './pages/HomePage';
 import TaskDetailPage from './pages/TaskDetailPage';
 import { getMe, logout, type User } from './services/auth';
 import { deleteConversation } from './services/conversations';
+import { updateConversationSettings } from './services/conversations';
 import { ejectModel, listModels, type ModelOption } from './services/models';
 
 function App() {
@@ -32,6 +33,7 @@ function App() {
   const [models, setModels] = useState<ModelOption[]>([]);
   const [selectedModel, setSelectedModel] = useState(localStorage.getItem('openmanus.selectedModel') || '');
   const [isEjectingModel, setIsEjectingModel] = useState(false);
+  const [requestedContextWindow, setRequestedContextWindow] = useState('');
   const { conversations, activeConversationId, createNewConversation, refreshConversations, removeConversation, setActiveConversationId } = useConversations();
   const location = useLocation();
   const navigate = useNavigate();
@@ -54,6 +56,12 @@ function App() {
       });
     }
   }, [refreshConversations, user]);
+
+  useEffect(() => {
+    const active = conversations.find(item => item.id === activeConversationId);
+    const value = active?.settings?.requested_context_window;
+    setRequestedContextWindow(value ? String(value) : '');
+  }, [conversations, activeConversationId]);
 
   if (user === undefined) {
     return <div className="flex h-screen w-screen items-center justify-center text-sm text-muted-foreground">Loading...</div>;
@@ -79,6 +87,25 @@ function App() {
     removeConversation(conversationId);
     if (location.pathname.includes(conversationId)) {
       navigate('/');
+    }
+  };
+
+  const handleSaveContextWindow = async () => {
+    if (!activeConversationId) return;
+    const trimmed = requestedContextWindow.trim();
+    const parsed = trimmed ? Number.parseInt(trimmed, 10) : null;
+    if (trimmed && (!parsed || parsed <= 0)) {
+      toast.error('Context window must be a positive integer');
+      return;
+    }
+    try {
+      await updateConversationSettings(activeConversationId, {
+        requested_context_window: parsed,
+      });
+      await refreshConversations();
+      toast.success('Context window updated');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not update context window');
     }
   };
 
@@ -149,6 +176,20 @@ function App() {
                     {isEjectingModel ? <LoaderIcon className="size-4 animate-spin" /> : <PowerOff className="size-4" />}
                   </Button>
                 </div>
+                <div className="mx-2 mt-2 space-y-1">
+                  <div className="text-xs text-muted-foreground">Requested context window</div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      className="h-8 min-w-0 flex-1 rounded-md border bg-background px-2 text-xs"
+                      placeholder="e.g. 128000"
+                      value={requestedContextWindow}
+                      onChange={event => setRequestedContextWindow(event.target.value)}
+                    />
+                    <Button size="sm" variant="outline" onClick={handleSaveContextWindow}>
+                      Save
+                    </Button>
+                  </div>
+                </div>
               </SidebarGroupContent>
             </SidebarGroup>
             <SidebarGroup>
@@ -168,6 +209,23 @@ function App() {
                         >
                           <MessageSquare className="size-4" />
                           <span className="truncate">{item.title}</span>
+                          <span
+                            className={cn(
+                              'ml-auto text-[10px]',
+                              typeof item.context?.usage_ratio === 'number' && item.context.usage_ratio >= 0.9
+                                ? 'text-amber-500'
+                                : 'text-muted-foreground',
+                            )}
+                            title={
+                              typeof item.context?.usage_ratio === 'number'
+                                ? `Context usage: ${Math.round(item.context.usage_ratio * 100)}%`
+                                : 'Context usage: no window configured'
+                            }
+                          >
+                            {typeof item.context?.usage_ratio === 'number'
+                              ? `${Math.round(item.context.usage_ratio * 100)}%`
+                              : '--'}
+                          </span>
                         </Link>
                         <Link
                           to={`/conversations/${item.id}/settings`}

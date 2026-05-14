@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import type { Message } from '@/libs/chat-messages/types';
 import { cn } from '@/libs/utils';
 import { getConversationRuntime, pauseConversationSandbox, resumeConversationSandbox, type ConversationRuntime } from '@/services/conversations';
-import { ActivityIcon, FileClockIcon, FolderIcon, GlobeIcon, ListChecksIcon, PauseIcon, PlayIcon, SquareTerminalIcon } from 'lucide-react';
+import { ActivityIcon, FileClockIcon, FolderIcon, GlobeIcon, ListChecksIcon, NetworkIcon, PauseIcon, PlayIcon, SquareTerminalIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { PreviewContent } from './preview-content';
 import { PreviewDescription } from './preview-description';
@@ -76,6 +76,9 @@ export const ChatPreview = ({ messages, taskId, conversationId, className }: Cha
                 </Button>
                 <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setData({ type: 'skills', conversationId })} title="Skills">
                   <ListChecksIcon className="h-3.5 w-3.5" />
+                </Button>
+                <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setData({ type: 'vault', conversationId })} title="Vault Sync">
+                  <NetworkIcon className="h-3.5 w-3.5" />
                 </Button>
                 <Button
                   variant="outline"
