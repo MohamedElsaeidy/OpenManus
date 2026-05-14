@@ -7,6 +7,8 @@ export interface Conversation {
     disabled_tools?: string[];
     requested_context_window?: number;
     auto_context_compress?: boolean;
+    disabled_skills?: string[];
+    enable_vendor_skills?: boolean;
   };
   context?: {
     requested_window?: number | null;
@@ -93,6 +95,7 @@ export interface SkillSummary {
   version: string;
   agent: string;
   triggers: string[];
+  enabled?: boolean;
 }
 
 export interface ObsidianGraph {
@@ -241,6 +244,8 @@ export async function updateConversationSettings(
     disabled_tools?: string[];
     requested_context_window?: number | null;
     auto_context_compress?: boolean;
+    disabled_skills?: string[];
+    enable_vendor_skills?: boolean;
   },
 ): Promise<Conversation> {
   const response = await fetch(`/api/conversations/${conversationId}/settings`, {

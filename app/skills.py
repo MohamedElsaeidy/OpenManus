@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 
 import yaml
 
@@ -70,15 +70,22 @@ def _parse_skill(path: Path) -> Skill | None:
     )
 
 
-def skill_roots(workspace_root: str | Path | None = None) -> list[Path]:
+def skill_roots(
+    workspace_root: str | Path | None = None, include_vendor: bool = True
+) -> list[Path]:
     roots = [
         Path.cwd() / ".openhands" / "skills",
         Path.cwd() / ".openhands" / "microagents",
         Path.cwd() / "skills",
-        Path.cwd() / "vendor" / "everything-claude-code" / "skills",
-        Path.cwd() / "vendor" / "everything-claude-code" / "agents-skills",
-        Path.cwd() / "vendor" / "everything-claude-code" / "agents",
     ]
+    if include_vendor:
+        roots.extend(
+            [
+                Path.cwd() / "vendor" / "everything-claude-code" / "skills",
+                Path.cwd() / "vendor" / "everything-claude-code" / "agents-skills",
+                Path.cwd() / "vendor" / "everything-claude-code" / "agents",
+            ]
+        )
     if workspace_root:
         workspace = Path(workspace_root)
         roots.extend(
@@ -86,18 +93,28 @@ def skill_roots(workspace_root: str | Path | None = None) -> list[Path]:
                 workspace / ".openhands" / "skills",
                 workspace / ".openhands" / "microagents",
                 workspace / "skills",
-                workspace / "vendor" / "everything-claude-code" / "skills",
-                workspace / "vendor" / "everything-claude-code" / "agents-skills",
-                workspace / "vendor" / "everything-claude-code" / "agents",
             ]
         )
+        if include_vendor:
+            roots.extend(
+                [
+                    workspace / "vendor" / "everything-claude-code" / "skills",
+                    workspace / "vendor" / "everything-claude-code" / "agents-skills",
+                    workspace / "vendor" / "everything-claude-code" / "agents",
+                ]
+            )
     return roots
 
 
-def load_skills(workspace_root: str | Path | None = None) -> list[Skill]:
+def load_skills(
+    workspace_root: str | Path | None = None,
+    include_vendor: bool = True,
+    disabled_skills: Optional[set[str]] = None,
+) -> list[Skill]:
     seen: set[Path] = set()
     skills: list[Skill] = []
-    for root in skill_roots(workspace_root):
+    blocked = {name.lower() for name in (disabled_skills or set())}
+    for root in skill_roots(workspace_root, include_vendor=include_vendor):
         if not root.exists():
             continue
         for path in sorted(root.rglob("*.md")):
@@ -107,14 +124,24 @@ def load_skills(workspace_root: str | Path | None = None) -> list[Skill]:
             seen.add(resolved)
             skill = _parse_skill(path)
             if skill is not None:
+                if skill.name.lower() in blocked:
+                    continue
                 skills.append(skill)
     return skills
 
 
 def select_skills(
-    prompt: str, workspace_root: str | Path | None = None, limit: int = 6
+    prompt: str,
+    workspace_root: str | Path | None = None,
+    limit: int = 6,
+    include_vendor: bool = True,
+    disabled_skills: Optional[set[str]] = None,
 ) -> list[Skill]:
-    skills = load_skills(workspace_root)
+    skills = load_skills(
+        workspace_root,
+        include_vendor=include_vendor,
+        disabled_skills=disabled_skills,
+    )
     always = [skill for skill in skills if skill.type == "repo" or not skill.triggers]
     matched = [skill for skill in skills if skill.triggers and skill.matches(prompt)]
     selected: list[Skill] = []

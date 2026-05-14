@@ -5,8 +5,16 @@ from unittest.mock import patch
 
 import pytest
 
-from scripts.grader import ComplianceResult, StepResult, grade
-from scripts.parser import ComplianceSpec, Detector, ObservationEvent, Step, parse_spec, parse_trace
+from scripts.grader import ComplianceResult, grade
+from scripts.parser import (
+    ComplianceSpec,
+    Detector,
+    ObservationEvent,
+    Step,
+    parse_spec,
+    parse_trace,
+)
+
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 
@@ -40,8 +48,8 @@ def _mock_compliant_classification(spec, trace, model="haiku"):  # noqa: ARG001
 def _mock_noncompliant_classification(spec, trace, model="haiku"):
     """Simulate LLM classifying a noncompliant trace (impl before test)."""
     return {
-        "write_impl": [0],    # src/fib.py written first
-        "write_test": [1],    # test written second
+        "write_impl": [0],  # src/fib.py written first
+        "write_test": [1],  # test written second
         "run_test_green": [2],  # only a passing test run
     }
 
@@ -52,7 +60,9 @@ def _mock_empty_classification(spec, trace, model="haiku"):
 
 class TestGradeCompliant:
     @patch("scripts.grader.classify_events", side_effect=_mock_compliant_classification)
-    def test_returns_compliance_result(self, mock_cls, tdd_spec, compliant_trace) -> None:
+    def test_returns_compliance_result(
+        self, mock_cls, tdd_spec, compliant_trace
+    ) -> None:
         result = grade(tdd_spec, compliant_trace)
         assert isinstance(result, ComplianceResult)
 
@@ -62,10 +72,16 @@ class TestGradeCompliant:
         assert result.compliance_rate == 1.0
 
     @patch("scripts.grader.classify_events", side_effect=_mock_compliant_classification)
-    def test_all_required_steps_detected(self, mock_cls, tdd_spec, compliant_trace) -> None:
+    def test_all_required_steps_detected(
+        self, mock_cls, tdd_spec, compliant_trace
+    ) -> None:
         result = grade(tdd_spec, compliant_trace)
-        required_results = [s for s in result.steps if s.step_id in
-                           ("write_test", "run_test_red", "write_impl", "run_test_green")]
+        required_results = [
+            s
+            for s in result.steps
+            if s.step_id
+            in ("write_test", "run_test_red", "write_impl", "run_test_green")
+        ]
         assert all(s.detected for s in required_results)
 
     @patch("scripts.grader.classify_events", side_effect=_mock_compliant_classification)
@@ -75,7 +91,9 @@ class TestGradeCompliant:
         assert refactor.detected is True
 
     @patch("scripts.grader.classify_events", side_effect=_mock_compliant_classification)
-    def test_no_hook_promotion_recommended(self, mock_cls, tdd_spec, compliant_trace) -> None:
+    def test_no_hook_promotion_recommended(
+        self, mock_cls, tdd_spec, compliant_trace
+    ) -> None:
         result = grade(tdd_spec, compliant_trace)
         assert result.recommend_hook_promotion is False
 
@@ -88,33 +106,53 @@ class TestGradeCompliant:
 
 
 class TestGradeNoncompliant:
-    @patch("scripts.grader.classify_events", side_effect=_mock_noncompliant_classification)
+    @patch(
+        "scripts.grader.classify_events", side_effect=_mock_noncompliant_classification
+    )
     def test_low_compliance(self, mock_cls, tdd_spec, noncompliant_trace) -> None:
         result = grade(tdd_spec, noncompliant_trace)
         assert result.compliance_rate < 1.0
 
-    @patch("scripts.grader.classify_events", side_effect=_mock_noncompliant_classification)
-    def test_write_test_fails_ordering(self, mock_cls, tdd_spec, noncompliant_trace) -> None:
+    @patch(
+        "scripts.grader.classify_events", side_effect=_mock_noncompliant_classification
+    )
+    def test_write_test_fails_ordering(
+        self, mock_cls, tdd_spec, noncompliant_trace
+    ) -> None:
         """write_test has before_step=write_impl, but test is written AFTER impl."""
         result = grade(tdd_spec, noncompliant_trace)
         write_test = next(s for s in result.steps if s.step_id == "write_test")
         assert write_test.detected is False
 
-    @patch("scripts.grader.classify_events", side_effect=_mock_noncompliant_classification)
-    def test_run_test_red_not_detected(self, mock_cls, tdd_spec, noncompliant_trace) -> None:
+    @patch(
+        "scripts.grader.classify_events", side_effect=_mock_noncompliant_classification
+    )
+    def test_run_test_red_not_detected(
+        self, mock_cls, tdd_spec, noncompliant_trace
+    ) -> None:
         result = grade(tdd_spec, noncompliant_trace)
         run_red = next(s for s in result.steps if s.step_id == "run_test_red")
         assert run_red.detected is False
 
-    @patch("scripts.grader.classify_events", side_effect=_mock_noncompliant_classification)
-    def test_hook_promotion_recommended(self, mock_cls, tdd_spec, noncompliant_trace) -> None:
+    @patch(
+        "scripts.grader.classify_events", side_effect=_mock_noncompliant_classification
+    )
+    def test_hook_promotion_recommended(
+        self, mock_cls, tdd_spec, noncompliant_trace
+    ) -> None:
         result = grade(tdd_spec, noncompliant_trace)
         assert result.recommend_hook_promotion is True
 
-    @patch("scripts.grader.classify_events", side_effect=_mock_noncompliant_classification)
-    def test_failure_reasons_present(self, mock_cls, tdd_spec, noncompliant_trace) -> None:
+    @patch(
+        "scripts.grader.classify_events", side_effect=_mock_noncompliant_classification
+    )
+    def test_failure_reasons_present(
+        self, mock_cls, tdd_spec, noncompliant_trace
+    ) -> None:
         result = grade(tdd_spec, noncompliant_trace)
-        failed_steps = [s for s in result.steps if not s.detected and s.step_id != "refactor"]
+        failed_steps = [
+            s for s in result.steps if not s.detected and s.step_id != "refactor"
+        ]
         for step in failed_steps:
             assert step.failure_reason is not None
 
@@ -127,7 +165,9 @@ class TestGradeEdgeCases:
         assert result.recommend_hook_promotion is True
 
     @patch("scripts.grader.classify_events", side_effect=_mock_compliant_classification)
-    def test_compliance_rate_is_ratio_of_required_only(self, mock_cls, tdd_spec, compliant_trace) -> None:
+    def test_compliance_rate_is_ratio_of_required_only(
+        self, mock_cls, tdd_spec, compliant_trace
+    ) -> None:
         result = grade(tdd_spec, compliant_trace)
         assert result.compliance_rate == 1.0
 

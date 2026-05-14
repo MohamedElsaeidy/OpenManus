@@ -16,12 +16,11 @@ import importlib.util
 import io
 import json
 import os
-import sys
 from pathlib import Path
 from types import SimpleNamespace
-from unittest import mock
 
 import pytest
+
 
 # Load instinct-cli.py (hyphenated filename requires importlib)
 _spec = importlib.util.spec_from_file_location(
@@ -92,8 +91,11 @@ def project_tree(tmp_path):
     global_evolved = homunculus / "evolved"
 
     for d in [
-        global_personal, global_inherited,
-        global_evolved / "skills", global_evolved / "commands", global_evolved / "agents",
+        global_personal,
+        global_inherited,
+        global_evolved / "skills",
+        global_evolved / "commands",
+        global_evolved / "agents",
         projects_dir,
     ]:
         d.mkdir(parents=True, exist_ok=True)
@@ -118,7 +120,11 @@ def patch_globals(project_tree, monkeypatch):
     monkeypatch.setattr(_mod, "GLOBAL_PERSONAL_DIR", project_tree["global_personal"])
     monkeypatch.setattr(_mod, "GLOBAL_INHERITED_DIR", project_tree["global_inherited"])
     monkeypatch.setattr(_mod, "GLOBAL_EVOLVED_DIR", project_tree["global_evolved"])
-    monkeypatch.setattr(_mod, "GLOBAL_OBSERVATIONS_FILE", project_tree["homunculus"] / "observations.jsonl")
+    monkeypatch.setattr(
+        _mod,
+        "GLOBAL_OBSERVATIONS_FILE",
+        project_tree["homunculus"] / "observations.jsonl",
+    )
     return project_tree
 
 
@@ -127,11 +133,14 @@ def _make_project(tree, pid="abc123", pname="test-project"):
     project_dir = tree["projects_dir"] / pid
     personal_dir = project_dir / "instincts" / "personal"
     inherited_dir = project_dir / "instincts" / "inherited"
-    for d in [personal_dir, inherited_dir,
-              project_dir / "evolved" / "skills",
-              project_dir / "evolved" / "commands",
-              project_dir / "evolved" / "agents",
-              project_dir / "observations.archive"]:
+    for d in [
+        personal_dir,
+        inherited_dir,
+        project_dir / "evolved" / "skills",
+        project_dir / "evolved" / "commands",
+        project_dir / "evolved" / "agents",
+        project_dir / "observations.archive",
+    ]:
         d.mkdir(parents=True, exist_ok=True)
 
     return {
@@ -279,6 +288,7 @@ def test_parse_garbage_input():
 # _validate_file_path tests
 # ─────────────────────────────────────────────
 
+
 def test_validate_normal_path(tmp_path):
     test_file = tmp_path / "test.yaml"
     test_file.write_text("hello")
@@ -330,6 +340,7 @@ def test_validate_relative_path(tmp_path, monkeypatch):
 # detect_project tests
 # ─────────────────────────────────────────────
 
+
 def test_detect_project_global_fallback(patch_globals, monkeypatch):
     """When no git and no env var, should return global project."""
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
@@ -354,9 +365,13 @@ def test_detect_project_from_env(patch_globals, monkeypatch, tmp_path):
     # Mock git remote to return a URL
     def mock_run(cmd, **kwargs):
         if "rev-parse" in cmd:
-            return SimpleNamespace(returncode=0, stdout=str(fake_repo) + "\n", stderr="")
+            return SimpleNamespace(
+                returncode=0, stdout=str(fake_repo) + "\n", stderr=""
+            )
         if "get-url" in cmd:
-            return SimpleNamespace(returncode=0, stdout="https://github.com/test/my-repo.git\n", stderr="")
+            return SimpleNamespace(
+                returncode=0, stdout="https://github.com/test/my-repo.git\n", stderr=""
+            )
         return SimpleNamespace(returncode=1, stdout="", stderr="")
 
     monkeypatch.setattr("subprocess.run", mock_run)
@@ -388,7 +403,9 @@ def test_detect_project_creates_directories(patch_globals, monkeypatch, tmp_path
 
     def mock_run(cmd, **kwargs):
         if "rev-parse" in cmd:
-            return SimpleNamespace(returncode=0, stdout=str(fake_repo) + "\n", stderr="")
+            return SimpleNamespace(
+                returncode=0, stdout=str(fake_repo) + "\n", stderr=""
+            )
         if "get-url" in cmd:
             return SimpleNamespace(returncode=1, stdout="", stderr="no remote")
         return SimpleNamespace(returncode=1, stdout="", stderr="")
@@ -405,13 +422,16 @@ def test_detect_project_creates_directories(patch_globals, monkeypatch, tmp_path
 # _load_instincts_from_dir tests
 # ─────────────────────────────────────────────
 
+
 def test_load_from_empty_dir(tmp_path):
     result = _load_instincts_from_dir(tmp_path, "personal", "project")
     assert result == []
 
 
 def test_load_from_nonexistent_dir(tmp_path):
-    result = _load_instincts_from_dir(tmp_path / "does-not-exist", "personal", "project")
+    result = _load_instincts_from_dir(
+        tmp_path / "does-not-exist", "personal", "project"
+    )
     assert result == []
 
 
@@ -504,6 +524,7 @@ def test_load_instincts_from_dir_uses_utf8_encoding(tmp_path, monkeypatch):
 # load_all_instincts tests
 # ─────────────────────────────────────────────
 
+
 def test_load_all_project_and_global(patch_globals):
     """Should load from both project and global directories."""
     tree = patch_globals
@@ -528,7 +549,9 @@ def test_load_all_project_overrides_global(patch_globals):
     # Same ID but different confidence
     proj_yaml = SAMPLE_INSTINCT_YAML.replace("id: test-instinct", "id: shared-id")
     proj_yaml = proj_yaml.replace("confidence: 0.8", "confidence: 0.9")
-    glob_yaml = SAMPLE_GLOBAL_INSTINCT_YAML.replace("id: global-instinct", "id: shared-id")
+    glob_yaml = SAMPLE_GLOBAL_INSTINCT_YAML.replace(
+        "id: global-instinct", "id: shared-id"
+    )
     glob_yaml = glob_yaml.replace("confidence: 0.9", "confidence: 0.3")
 
     (project["instincts_personal"] / "shared.yaml").write_text(proj_yaml)
@@ -610,6 +633,7 @@ def test_load_all_empty(patch_globals):
 # cmd_status tests
 # ─────────────────────────────────────────────
 
+
 def test_cmd_status_no_instincts(patch_globals, monkeypatch, capsys):
     """Status with no instincts should print fallback message."""
     tree = patch_globals
@@ -661,13 +685,17 @@ def test_print_instincts_by_domain_is_cp1252_safe(monkeypatch):
     stream = io.TextIOWrapper(raw, encoding="cp1252")
     monkeypatch.setattr(_mod.sys, "stdout", stream)
 
-    _mod._print_instincts_by_domain([{
-        "id": "windows-safe",
-        "trigger": "when stdout uses cp1252",
-        "confidence": 0.8,
-        "domain": "platform",
-        "scope": "project",
-    }])
+    _mod._print_instincts_by_domain(
+        [
+            {
+                "id": "windows-safe",
+                "trigger": "when stdout uses cp1252",
+                "confidence": 0.8,
+                "domain": "platform",
+                "scope": "project",
+            }
+        ]
+    )
 
     stream.flush()
     out = raw.getvalue().decode("cp1252")
@@ -690,6 +718,7 @@ def test_cmd_status_returns_int(patch_globals, monkeypatch):
 # ─────────────────────────────────────────────
 # cmd_projects tests
 # ─────────────────────────────────────────────
+
 
 def test_cmd_projects_empty_registry(patch_globals, capsys):
     """No projects should print helpful message."""
@@ -732,6 +761,7 @@ def test_cmd_projects_with_registry(patch_globals, capsys):
 # ─────────────────────────────────────────────
 # _promote_specific tests
 # ─────────────────────────────────────────────
+
 
 def test_promote_specific_not_found(patch_globals, capsys):
     """Promoting nonexistent instinct should fail."""
@@ -795,6 +825,7 @@ def test_promote_specific_success(patch_globals, capsys):
 # _promote_auto tests
 # ─────────────────────────────────────────────
 
+
 def test_promote_auto_no_candidates(patch_globals, capsys):
     """Auto-promote with no cross-project instincts should say so."""
     tree = patch_globals
@@ -834,8 +865,18 @@ Always review for injection.
 
     # Write registry
     registry = {
-        "proj1": {"name": "project-one", "root": "/a", "remote": "", "last_seen": "2025-01-01T00:00:00Z"},
-        "proj2": {"name": "project-two", "root": "/b", "remote": "", "last_seen": "2025-01-01T00:00:00Z"},
+        "proj1": {
+            "name": "project-one",
+            "root": "/a",
+            "remote": "",
+            "last_seen": "2025-01-01T00:00:00Z",
+        },
+        "proj2": {
+            "name": "project-two",
+            "root": "/b",
+            "remote": "",
+            "last_seen": "2025-01-01T00:00:00Z",
+        },
     }
     tree["registry_file"].write_text(json.dumps(registry))
 
@@ -873,8 +914,18 @@ Use descriptive variable names.
     (p2["instincts_personal"] / "uni.yaml").write_text(high_conf_yaml)
 
     registry = {
-        "proj1": {"name": "project-one", "root": "/a", "remote": "", "last_seen": "2025-01-01T00:00:00Z"},
-        "proj2": {"name": "project-two", "root": "/b", "remote": "", "last_seen": "2025-01-01T00:00:00Z"},
+        "proj1": {
+            "name": "project-one",
+            "root": "/a",
+            "remote": "",
+            "last_seen": "2025-01-01T00:00:00Z",
+        },
+        "proj2": {
+            "name": "project-two",
+            "root": "/b",
+            "remote": "",
+            "last_seen": "2025-01-01T00:00:00Z",
+        },
     }
     tree["registry_file"].write_text(json.dumps(registry))
 
@@ -910,8 +961,18 @@ Invalid id should be skipped.
     (p2["instincts_personal"] / "bad.yaml").write_text(bad_id_yaml)
 
     registry = {
-        "proj1": {"name": "project-one", "root": "/a", "remote": "", "last_seen": "2025-01-01T00:00:00Z"},
-        "proj2": {"name": "project-two", "root": "/b", "remote": "", "last_seen": "2025-01-01T00:00:00Z"},
+        "proj1": {
+            "name": "project-one",
+            "root": "/a",
+            "remote": "",
+            "last_seen": "2025-01-01T00:00:00Z",
+        },
+        "proj2": {
+            "name": "project-two",
+            "root": "/b",
+            "remote": "",
+            "last_seen": "2025-01-01T00:00:00Z",
+        },
     }
     tree["registry_file"].write_text(json.dumps(registry))
 
@@ -926,6 +987,7 @@ Invalid id should be skipped.
 # _find_cross_project_instincts tests
 # ─────────────────────────────────────────────
 
+
 def test_find_cross_project_empty_registry(patch_globals):
     tree = patch_globals
     tree["registry_file"].write_text("{}")
@@ -939,7 +1001,14 @@ def test_find_cross_project_single_project(patch_globals):
     p1 = _make_project(tree, pid="proj1", pname="project-one")
     (p1["instincts_personal"] / "inst.yaml").write_text(SAMPLE_INSTINCT_YAML)
 
-    registry = {"proj1": {"name": "project-one", "root": "/a", "remote": "", "last_seen": "2025-01-01T00:00:00Z"}}
+    registry = {
+        "proj1": {
+            "name": "project-one",
+            "root": "/a",
+            "remote": "",
+            "last_seen": "2025-01-01T00:00:00Z",
+        }
+    }
     tree["registry_file"].write_text(json.dumps(registry))
 
     result = _find_cross_project_instincts()
@@ -956,8 +1025,18 @@ def test_find_cross_project_shared_instinct(patch_globals):
     (p2["instincts_personal"] / "shared.yaml").write_text(SAMPLE_INSTINCT_YAML)
 
     registry = {
-        "proj1": {"name": "project-one", "root": "/a", "remote": "", "last_seen": "2025-01-01T00:00:00Z"},
-        "proj2": {"name": "project-two", "root": "/b", "remote": "", "last_seen": "2025-01-01T00:00:00Z"},
+        "proj1": {
+            "name": "project-one",
+            "root": "/a",
+            "remote": "",
+            "last_seen": "2025-01-01T00:00:00Z",
+        },
+        "proj2": {
+            "name": "project-two",
+            "root": "/b",
+            "remote": "",
+            "last_seen": "2025-01-01T00:00:00Z",
+        },
     }
     tree["registry_file"].write_text(json.dumps(registry))
 
@@ -969,6 +1048,7 @@ def test_find_cross_project_shared_instinct(patch_globals):
 # ─────────────────────────────────────────────
 # load_registry tests
 # ─────────────────────────────────────────────
+
 
 def test_load_registry_missing_file(patch_globals):
     result = load_registry()

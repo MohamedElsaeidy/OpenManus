@@ -1,5 +1,5 @@
 import { Button } from '@/components/ui/button';
-import { getConversation, updateConversationSettings, type Conversation } from '@/services/conversations';
+import { getConversation, listSkills, updateConversationSettings, type Conversation, type SkillSummary } from '@/services/conversations';
 import { listModels, type ModelOption } from '@/services/models';
 import { listTools } from '@/services/tools';
 import type { ToolOption } from '@/services/admin';
@@ -13,19 +13,25 @@ export default function ConversationSettingsPage() {
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [tools, setTools] = useState<ToolOption[]>([]);
+  const [skills, setSkills] = useState<SkillSummary[]>([]);
   const [model, setModel] = useState('');
   const [disabledTools, setDisabledTools] = useState<string[]>([]);
+  const [disabledSkills, setDisabledSkills] = useState<string[]>([]);
+  const [enableVendorSkills, setEnableVendorSkills] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     if (!conversationId) return;
-    Promise.all([getConversation(conversationId), listModels(), listTools()])
-      .then(([loadedConversation, loadedModels, loadedTools]) => {
+    Promise.all([getConversation(conversationId), listModels(), listTools(), listSkills(conversationId)])
+      .then(([loadedConversation, loadedModels, loadedTools, loadedSkills]) => {
         setConversation(loadedConversation);
         setModels(loadedModels);
         setTools(loadedTools);
+        setSkills(loadedSkills.skills || []);
         setModel(loadedConversation.model || loadedModels[0]?.id || '');
         setDisabledTools(loadedConversation.settings?.disabled_tools || []);
+        setDisabledSkills(loadedConversation.settings?.disabled_skills || []);
+        setEnableVendorSkills(loadedConversation.settings?.enable_vendor_skills ?? true);
       })
       .catch(error => toast.error(error instanceof Error ? error.message : 'Could not load settings'));
   }, [conversationId]);
@@ -42,12 +48,22 @@ export default function ConversationSettingsPage() {
     setDisabledTools([...next]);
   };
 
+  const disabledSkillSet = new Set(disabledSkills);
+  const toggleSkill = (name: string) => {
+    const next = new Set(disabledSkillSet);
+    if (next.has(name)) next.delete(name);
+    else next.add(name);
+    setDisabledSkills([...next]);
+  };
+
   const save = async () => {
     setIsSaving(true);
     try {
       const saved = await updateConversationSettings(conversationId, {
         model,
         disabled_tools: disabledTools,
+        disabled_skills: disabledSkills,
+        enable_vendor_skills: enableVendorSkills,
       });
       setConversation(saved);
       toast.success('Conversation settings saved');
@@ -110,6 +126,37 @@ export default function ConversationSettingsPage() {
                 </label>
               );
             })}
+          </div>
+        </section>
+
+        <section className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-medium uppercase text-muted-foreground">Skills</h2>
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <input type="checkbox" checked={enableVendorSkills} onChange={e => setEnableVendorSkills(e.target.checked)} />
+              Enable vendor skills
+            </label>
+          </div>
+          <div className="max-h-[420px] space-y-2 overflow-auto rounded-md border p-2">
+            {skills.map(skill => {
+              const enabled = !disabledSkillSet.has(skill.name);
+              const fromVendor = skill.path.includes('/vendor/everything-claude-code/');
+              return (
+                <label key={`${skill.path}:${skill.name}`} className="flex items-center justify-between rounded-md border p-3 text-sm">
+                  <span className="min-w-0">
+                    <span className="block truncate font-medium">{skill.name}</span>
+                    <span className="text-xs text-muted-foreground">{fromVendor ? 'vendor' : 'local'} · {skill.type}</span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={enabled}
+                    onChange={() => toggleSkill(skill.name)}
+                    disabled={fromVendor && !enableVendorSkills}
+                  />
+                </label>
+              );
+            })}
+            {!skills.length && <div className="text-sm text-muted-foreground">No skills discovered.</div>}
           </div>
         </section>
       </div>

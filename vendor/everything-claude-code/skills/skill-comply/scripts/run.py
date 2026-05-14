@@ -16,6 +16,7 @@ from scripts.runner import run_scenario
 from scripts.scenario_generator import generate_scenarios
 from scripts.spec_generator import generate_spec
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -67,12 +68,14 @@ def main() -> None:
     logger.info("       %d steps extracted", len(spec.steps))
 
     # Step 2: Generate scenarios
-    spec_yaml = yaml.dump({
-        "steps": [
-            {"id": s.id, "description": s.description, "required": s.required}
-            for s in spec.steps
-        ]
-    })
+    spec_yaml = yaml.dump(
+        {
+            "steps": [
+                {"id": s.id, "description": s.description, "required": s.required}
+                for s in spec.steps
+            ]
+        }
+    )
     logger.info("[2/4] Generating scenarios (3 prompt strictness levels)...")
     scenarios = generate_scenarios(args.skill, spec_yaml, model=args.gen_model)
     logger.info("       %d scenarios generated", len(scenarios))
@@ -97,10 +100,14 @@ def main() -> None:
         run = run_scenario(scenario, model=args.model)
         result = grade(spec, list(run.observations))
         graded_results.append((scenario.level_name, result, list(run.observations)))
-        logger.info("       %s: %.0f%%", scenario.level_name, result.compliance_rate * 100)
+        logger.info(
+            "       %s: %.0f%%", scenario.level_name, result.compliance_rate * 100
+        )
 
     # Step 4: Generate report
-    skill_name = args.skill.parent.name if args.skill.stem == "SKILL" else args.skill.stem
+    skill_name = (
+        args.skill.parent.name if args.skill.stem == "SKILL" else args.skill.stem
+    )
     output_path = args.output or results_dir / f"{skill_name}.md"
     logger.info("[4/4] Generating report...")
 
@@ -113,7 +120,9 @@ def main() -> None:
     if not graded_results:
         logger.warning("No scenarios were executed.")
         return
-    overall = sum(r.compliance_rate for _, r, _obs in graded_results) / len(graded_results)
+    overall = sum(r.compliance_rate for _, r, _obs in graded_results) / len(
+        graded_results
+    )
     logger.info("\n%s", "=" * 50)
     logger.info("Overall Compliance: %.0f%%", overall * 100)
     if overall < spec.threshold_promote_to_hook:

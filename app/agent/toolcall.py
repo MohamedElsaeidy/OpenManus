@@ -12,8 +12,8 @@ from app.exceptions import TokenLimitExceeded
 from app.llm import MULTIMODAL_MODELS
 from app.prompt.toolcall import NEXT_STEP_PROMPT, SYSTEM_PROMPT
 from app.schema import TOOL_CHOICE_TYPE, AgentState, Message, ToolCall, ToolChoice
-from app.task_context import current_tool_call
 from app.task_context import (
+    current_tool_call,
     get_current_auto_context_compress,
     get_current_requested_context_window,
 )
@@ -307,8 +307,12 @@ class ToolCallAgent(ReActAgent):
         try:
             supports_images = self.llm.active_model in MULTIMODAL_MODELS
             formatted_system = self.llm.format_messages(system_msgs, supports_images)
-            formatted_messages = self.llm.format_messages(self.messages, supports_images)
-            total_tokens = self.llm.count_message_tokens(formatted_system + formatted_messages)
+            formatted_messages = self.llm.format_messages(
+                self.messages, supports_images
+            )
+            total_tokens = self.llm.count_message_tokens(
+                formatted_system + formatted_messages
+            )
         except Exception:
             return
 

@@ -25,26 +25,29 @@ Examples:
   python scripts/ws_listener.py --clear /tmp/mydir                # Custom dir with clear
   kill "$(cat ~/.local/state/videodb/videodb_ws_pid)"             # Stop the listener
 """
-import os
-import sys
-import json
-import signal
 import asyncio
-import logging
 import contextlib
+import json
+import logging
+import os
+import signal
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+
 load_dotenv()
 
 import videodb
 from videodb.exceptions import AuthenticationError
 
+
 # Retry config
 MAX_RETRIES = 10
 INITIAL_BACKOFF = 1  # seconds
-MAX_BACKOFF = 60     # seconds
+MAX_BACKOFF = 60  # seconds
 
 logging.basicConfig(
     level=logging.INFO,
@@ -78,7 +81,7 @@ def ensure_private_dir(path: Path) -> Path:
 def parse_args() -> tuple[bool, Path]:
     clear = False
     output_dir: str | None = None
-    
+
     args = sys.argv[1:]
     for arg in args:
         if arg == "--clear":
@@ -87,7 +90,7 @@ def parse_args() -> tuple[bool, Path]:
             raise SystemExit(f"Unknown flag: {arg}")
         elif not arg.startswith("-"):
             output_dir = arg
-    
+
     if output_dir is None:
         events_dir = os.environ.get("VIDEODB_EVENTS_DIR")
         if events_dir:
@@ -95,6 +98,7 @@ def parse_args() -> tuple[bool, Path]:
         return clear, ensure_private_dir(default_output_dir())
 
     return clear, ensure_private_dir(Path(output_dir))
+
 
 CLEAR_EVENTS, OUTPUT_DIR = parse_args()
 EVENTS_FILE = OUTPUT_DIR / "videodb_events.jsonl"
@@ -147,10 +151,10 @@ def is_fatal_error(exc: Exception) -> bool:
 async def listen_with_retry():
     """Main listen loop with auto-reconnect and exponential backoff."""
     global _first_connection
-    
+
     retry_count = 0
     backoff = INITIAL_BACKOFF
-    
+
     while retry_count < MAX_RETRIES:
         try:
             conn = videodb.connect()
@@ -168,11 +172,11 @@ async def listen_with_retry():
                 raise
             retry_count += 1
             log(f"Connection error: {e}")
-            
+
             if retry_count >= MAX_RETRIES:
                 log(f"Max retries ({MAX_RETRIES}) exceeded, exiting")
                 break
-            
+
             log(f"Reconnecting in {backoff}s (attempt {retry_count}/{MAX_RETRIES})...")
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, MAX_BACKOFF)
@@ -217,7 +221,9 @@ async def listen_with_retry():
                     log(f"Max retries ({MAX_RETRIES}) exceeded, exiting")
                     return
 
-                log(f"Reconnecting in {backoff}s (attempt {retry_count}/{MAX_RETRIES})...")
+                log(
+                    f"Reconnecting in {backoff}s (attempt {retry_count}/{MAX_RETRIES})..."
+                )
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, MAX_BACKOFF)
                 break
@@ -233,20 +239,20 @@ async def main_async():
     """Async main with signal handling."""
     loop = asyncio.get_running_loop()
     shutdown_event = asyncio.Event()
-    
+
     def handle_signal():
         log("Received shutdown signal")
         shutdown_event.set()
-    
+
     # Register signal handlers
     for sig in (signal.SIGINT, signal.SIGTERM):
         with contextlib.suppress(NotImplementedError):
             loop.add_signal_handler(sig, handle_signal)
-    
+
     # Run listener with cancellation support
     listen_task = asyncio.create_task(listen_with_retry())
     shutdown_task = asyncio.create_task(shutdown_event.wait())
-    
+
     _done, pending = await asyncio.wait(
         [listen_task, shutdown_task],
         return_when=asyncio.FIRST_COMPLETED,
@@ -254,7 +260,7 @@ async def main_async():
 
     if listen_task.done():
         await listen_task
-    
+
     # Cancel remaining tasks
     for task in pending:
         task.cancel()
@@ -266,7 +272,7 @@ async def main_async():
     for sig in (signal.SIGINT, signal.SIGTERM):
         with contextlib.suppress(NotImplementedError):
             loop.remove_signal_handler(sig)
-    
+
     log("Shutdown complete")
 
 

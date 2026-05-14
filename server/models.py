@@ -122,10 +122,16 @@ class ObsidianEdgeORM(Base):
         index=True,
     )
     source_note_id = Column(
-        UUID(as_uuid=True), ForeignKey("obsidian_notes.note_id"), nullable=False, index=True
+        UUID(as_uuid=True),
+        ForeignKey("obsidian_notes.note_id"),
+        nullable=False,
+        index=True,
     )
     target_note_id = Column(
-        UUID(as_uuid=True), ForeignKey("obsidian_notes.note_id"), nullable=False, index=True
+        UUID(as_uuid=True),
+        ForeignKey("obsidian_notes.note_id"),
+        nullable=False,
+        index=True,
     )
     relation = Column(String, nullable=False, default="wikilink")
     created_at = Column(DateTime(timezone=True), server_default=func.now())

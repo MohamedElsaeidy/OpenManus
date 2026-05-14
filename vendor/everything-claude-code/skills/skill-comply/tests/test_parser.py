@@ -13,6 +13,7 @@ from scripts.parser import (
     parse_trace,
 )
 
+
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 
 

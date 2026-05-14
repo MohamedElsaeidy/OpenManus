@@ -10,6 +10,7 @@ import yaml
 
 from scripts.utils import extract_yaml
 
+
 PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
 
@@ -34,10 +35,8 @@ def generate_scenarios(
     """
     skill_content = skill_path.read_text()
     prompt_template = (PROMPTS_DIR / "scenario_generator.md").read_text()
-    prompt = (
-        prompt_template
-        .replace("{skill_content}", skill_content)
-        .replace("{spec_yaml}", spec_yaml)
+    prompt = prompt_template.replace("{skill_content}", skill_content).replace(
+        "{spec_yaml}", spec_yaml
     )
 
     result = subprocess.run(
@@ -58,13 +57,15 @@ def generate_scenarios(
 
     scenarios: list[Scenario] = []
     for s in parsed["scenarios"]:
-        scenarios.append(Scenario(
-            id=s["id"],
-            level=s["level"],
-            level_name=s["level_name"],
-            description=s["description"],
-            prompt=s["prompt"].strip(),
-            setup_commands=tuple(s.get("setup_commands", [])),
-        ))
+        scenarios.append(
+            Scenario(
+                id=s["id"],
+                level=s["level"],
+                level_name=s["level_name"],
+                description=s["description"],
+                prompt=s["prompt"].strip(),
+                setup_commands=tuple(s.get("setup_commands", [])),
+            )
+        )
 
     return sorted(scenarios, key=lambda s: s.level)
