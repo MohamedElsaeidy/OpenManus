@@ -53,4 +53,3 @@ def load_rl_policy_context() -> str:
         "Policy guidance:\n"
         f"{policy_text}"
     )
-
