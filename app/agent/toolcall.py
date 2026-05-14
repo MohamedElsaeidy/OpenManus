@@ -26,6 +26,7 @@ FINAL_RESPONSE_RE = re.compile(
     r"\b(done|completed|finished|implemented|created|verified|here(?:'| i)s what|summary|remaining limitations|blocked)\b",
     re.IGNORECASE,
 )
+OBSERVE_ONLY_TOOLS = {"codebase_overview", "glob", "grep", "read_files"}
 
 
 class ToolCallAgent(ReActAgent):
@@ -47,6 +48,7 @@ class ToolCallAgent(ReActAgent):
     _current_base64_image: Optional[str] = None
     _last_assistant_content: str = ""
     _consecutive_no_tool_nonfinal: int = 0
+    _consecutive_observe_only_steps: int = 0
 
     max_steps: int = config.agent.max_steps
     max_tools_per_step: int = config.agent.max_tools_per_step
@@ -115,6 +117,24 @@ class ToolCallAgent(ReActAgent):
         self.tool_calls = tool_calls = (
             response.tool_calls if response and response.tool_calls else []
         )
+        if tool_calls and self._is_observe_only_batch(tool_calls):
+            self._consecutive_observe_only_steps += 1
+            if self._consecutive_observe_only_steps >= 5:
+                task.emit(
+                    "warning",
+                    {
+                        "message": "Repeated observe-only steps detected. Agent must now execute implementation/verification actions or terminate with a concrete status summary."
+                    },
+                )
+                self.memory.add_message(
+                    Message.user_message(
+                        "Do not run more inspection-only steps now. "
+                        "Execute the next implementation action(s), then verify. "
+                        "If blocked, call terminate with exact blocker, completed steps, and remaining work."
+                    )
+                )
+        elif tool_calls:
+            self._consecutive_observe_only_steps = 0
         if len(tool_calls) > self.max_tools_per_step:
             tool_calls = tool_calls[: self.max_tools_per_step]
             self.tool_calls = tool_calls
@@ -260,6 +280,13 @@ class ToolCallAgent(ReActAgent):
         if text.endswith(":"):
             return False
         return True
+
+    @staticmethod
+    def _is_observe_only_batch(tool_calls: List[ToolCall]) -> bool:
+        names = [call.function.name for call in tool_calls]
+        if not names:
+            return False
+        return all(name in OBSERVE_ONLY_TOOLS for name in names)
 
     async def act(self, task: Task) -> str:
         """Execute tool calls and handle their results."""
