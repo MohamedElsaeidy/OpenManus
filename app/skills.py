@@ -75,6 +75,9 @@ def skill_roots(workspace_root: str | Path | None = None) -> list[Path]:
         Path.cwd() / ".openhands" / "skills",
         Path.cwd() / ".openhands" / "microagents",
         Path.cwd() / "skills",
+        Path.cwd() / "vendor" / "everything-claude-code" / "skills",
+        Path.cwd() / "vendor" / "everything-claude-code" / "agents-skills",
+        Path.cwd() / "vendor" / "everything-claude-code" / "agents",
     ]
     if workspace_root:
         workspace = Path(workspace_root)
@@ -83,6 +86,9 @@ def skill_roots(workspace_root: str | Path | None = None) -> list[Path]:
                 workspace / ".openhands" / "skills",
                 workspace / ".openhands" / "microagents",
                 workspace / "skills",
+                workspace / "vendor" / "everything-claude-code" / "skills",
+                workspace / "vendor" / "everything-claude-code" / "agents-skills",
+                workspace / "vendor" / "everything-claude-code" / "agents",
             ]
         )
     return roots
@@ -94,7 +100,7 @@ def load_skills(workspace_root: str | Path | None = None) -> list[Skill]:
     for root in skill_roots(workspace_root):
         if not root.exists():
             continue
-        for path in sorted(root.glob("*.md")):
+        for path in sorted(root.rglob("*.md")):
             resolved = path.resolve()
             if resolved in seen:
                 continue
