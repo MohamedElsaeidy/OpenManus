@@ -4,10 +4,23 @@ from pydantic import Field, model_validator
 
 from app.agent.base import Task, TaskInterrupted
 from app.agent.browser import BrowserContextHelper
+from app.agent.policy_loader import load_rl_policy_context
 from app.agent.toolcall import ToolCallAgent
 from app.config import config
 from app.prompt.manus import NEXT_STEP_PROMPT, SYSTEM_PROMPT
-from app.tool import Terminate, ToolCollection
+from app.tool import (
+    Bash,
+    CodebaseOverview,
+    GlobSearch,
+    GrepSearch,
+    PlanningTool,
+    ReadFiles,
+    SkillPlaybook,
+    Terminate,
+    ToolCollection,
+    WaitForUserInput,
+    WebSearch,
+)
 from app.tool.ask_human import AskHuman
 from app.tool.browser_use_tool import BrowserUseTool
 from app.tool.mcp import MCPClients, MCPClientTool
@@ -23,9 +36,11 @@ class Manus(ToolCallAgent):
 
     system_prompt: str = SYSTEM_PROMPT.format(directory=config.workspace_root)
     next_step_prompt: str = NEXT_STEP_PROMPT
+    workspace_root: str = str(config.workspace_root)
+    disabled_tools: set[str] = Field(default_factory=set)
 
     max_observe: int = 10000
-    max_steps: int = 20
+    max_steps: int = config.agent.max_steps
 
     # MCP clients for remote tool access
     mcp_clients: MCPClients = Field(default_factory=MCPClients)
@@ -33,10 +48,19 @@ class Manus(ToolCallAgent):
     # Add general-purpose tools to the tool collection
     available_tools: ToolCollection = Field(
         default_factory=lambda: ToolCollection(
+            SkillPlaybook(),
+            PlanningTool(),
+            CodebaseOverview(),
+            GlobSearch(),
+            GrepSearch(),
+            ReadFiles(),
             PythonExecute(),
+            Bash(),
             BrowserUseTool(),
+            WebSearch(),
             StrReplaceEditor(),
             AskHuman(),
+            WaitForUserInput(),
             Terminate(),
         )
     )
@@ -53,6 +77,12 @@ class Manus(ToolCallAgent):
     @model_validator(mode="after")
     def initialize_helper(self) -> "Manus":
         """Initialize basic components synchronously."""
+        self.system_prompt = SYSTEM_PROMPT.format(directory=self.workspace_root)
+        rl_context = load_rl_policy_context()
+        if rl_context:
+            self.system_prompt = f"{self.system_prompt}\n\n{rl_context}"
+        if self.disabled_tools:
+            self.available_tools = self.available_tools.without(self.disabled_tools)
         self.browser_context_helper = BrowserContextHelper(self)
         return self
 

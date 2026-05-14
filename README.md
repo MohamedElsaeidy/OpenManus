@@ -1,195 +1,144 @@
 <p align="center">
-  <img src="assets/logo.jpg" width="200"/>
+  <img src="assets/logo.jpg" width="180" alt="OpenManus"/>
 </p>
 
 English | [中文](README_zh.md) | [한국어](README_ko.md) | [日本語](README_ja.md)
 
-[![GitHub stars](https://img.shields.io/github/stars/FoundationAgents/OpenManus?style=social)](https://github.com/FoundationAgents/OpenManus/stargazers)
-&ensp;
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) &ensp;
-[![Discord Follow](https://dcbadge.vercel.app/api/server/DYn29wFk9z?style=flat)](https://discord.gg/DYn29wFk9z)
-[![Demo](https://img.shields.io/badge/Demo-Hugging%20Face-yellow)](https://huggingface.co/spaces/lyh-917/OpenManusDemo)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.15186407.svg)](https://doi.org/10.5281/zenodo.15186407)
+# OpenManus
 
-# 👋 OpenManus
+**A conversation-first agent runtime with persistent sandbox computers, live observability, and practical team workflows.**
 
-Manus is incredible, but OpenManus can achieve any idea without an *Invite Code* 🛫!
+This fork focuses on real daily usage: long-running conversations, isolated workspaces, runtime controls, and a UI that makes the agent’s work visible and manageable.
 
-Our team members [@Xinbin Liang](https://github.com/mannaandpoem) and [@Jinyu Xiang](https://github.com/XiangJinyu) (core authors), along with [@Zhaoyang Yu](https://github.com/MoshiQAQ), [@Jiayi Zhang](https://github.com/didiforgithub), and [@Sirui Hong](https://github.com/stellaHSR), we are from [@MetaGPT](https://github.com/geekan/MetaGPT). The prototype is launched within 3 hours and we are keeping building!
+## Why This Repo
 
-It's a simple implementation, so we welcome any suggestions, contributions, and feedback!
+OpenManus here is built for people who want an agent they can actually run, inspect, and improve:
 
-Enjoy your own agent with OpenManus!
+- Persistent conversations with replayable history
+- Per-conversation sandbox + workspace isolation
+- Live tool traces, terminal output, browser screenshots, and token counts
+- Runtime controls for processes, ports, and spawned containers
+- Optional RL policy scaffold compatible with OpenManus-RL workflows
 
-We're also excited to introduce [OpenManus-RL](https://github.com/OpenManus/OpenManus-RL), an open-source project dedicated to reinforcement learning (RL)- based (such as GRPO) tuning methods for LLM agents, developed collaboratively by researchers from UIUC and OpenManus.
+## What’s Implemented
 
-## Project Demo
+- Auth + admin bootstrap (first signup becomes admin)
+- Session-based web auth and admin settings UI/API
+- Conversation model with grouped tasks and follow-up continuity
+- Per-conversation files under `workspace/conversations/<conversation_id>/`
+- Reused sandbox computer per conversation
+- Mid-task user messages to running agents
+- Live SSE lifecycle stream (thoughts, tools, terminal, browser, usage)
+- Process/container visibility and kill controls (with protection rules)
+- Better completion artifacts and warnings (including missing PDF hints)
+- OpenHands-style skill loading support
+- RL integration scaffold and policy export helper
 
-<video src="https://private-user-images.githubusercontent.com/61239030/420168772-6dcfd0d2-9142-45d9-b74e-d10aa75073c6.mp4?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NDEzMTgwNTksIm5iZiI6MTc0MTMxNzc1OSwicGF0aCI6Ii82MTIzOTAzMC80MjAxNjg3NzItNmRjZmQwZDItOTE0Mi00NWQ5LWI3NGUtZDEwYWE3NTA3M2M2Lm1wND9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNTAzMDclMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjUwMzA3VDAzMjIzOVomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTdiZjFkNjlmYWNjMmEzOTliM2Y3M2VlYjgyNDRlZDJmOWE3NWZhZjE1MzhiZWY4YmQ3NjdkNTYwYTU5ZDA2MzYmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.UuHQCgWYkh0OQq9qsUWqGsUbhG3i9jcZDAMeHjLt5T4" data-canonical-src="https://private-user-images.githubusercontent.com/61239030/420168772-6dcfd0d2-9142-45d9-b74e-d10aa75073c6.mp4?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NDEzMTgwNTksIm5iZiI6MTc0MTMxNzc1OSwicGF0aCI6Ii82MTIzOTAzMC80MjAxNjg3NzItNmRjZmQwZDItOTE0Mi00NWQ5LWI3NGUtZDEwYWE3NTA3M2M2Lm1wND9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNTAzMDclMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjUwMzA3VDAzMjIzOVomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTdiZjFkNjlmYWNjMmEzOTliM2Y3M2VlYjgyNDRlZDJmOWE3NWZhZjE1MzhiZWY4YmQ3NjdkNTYwYTU5ZDA2MzYmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.UuHQCgWYkh0OQq9qsUWqGsUbhG3i9jcZDAMeHjLt5T4" controls="controls" muted="muted" class="d-block rounded-bottom-2 border-top width-fit" style="max-height:640px; min-height: 200px"></video>
+## Architecture
 
-## Installation
+- Backend API: `server/api.py` (FastAPI + SSE)
+- Worker runtime: `server/tasks.py` (Celery)
+- Agent core: `app/agent/manus.py`, `app/agent/toolcall.py`
+- LLM compatibility/runtime: `app/llm.py`
+- Sandbox lifecycle: `app/sandbox/conversation.py`
+- Frontend: `frontend/` (React + Vite)
+- Persistence: PostgreSQL
+- Event transport: Redis Streams
 
-We provide two installation methods. Method 2 (using uv) is recommended for faster installation and better dependency management.
+## Quick Start (Docker)
 
-### Method 1: Using conda
-
-1. Create a new conda environment:
-
-```bash
-conda create -n open_manus python=3.12
-conda activate open_manus
-```
-
-2. Clone the repository:
-
-```bash
-git clone https://github.com/FoundationAgents/OpenManus.git
-cd OpenManus
-```
-
-3. Install dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-### Method 2: Using uv (Recommended)
-
-1. Install uv (A fast Python package installer and resolver):
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-2. Clone the repository:
-
-```bash
-git clone https://github.com/FoundationAgents/OpenManus.git
-cd OpenManus
-```
-
-3. Create a new virtual environment and activate it:
-
-```bash
-uv venv --python 3.12
-source .venv/bin/activate  # On Unix/macOS
-# Or on Windows:
-# .venv\Scripts\activate
-```
-
-4. Install dependencies:
-
-```bash
-uv pip install -r requirements.txt
-```
-
-### Browser Automation Tool (Optional)
-```bash
-playwright install
-```
-
-## Configuration
-
-OpenManus requires configuration for the LLM APIs it uses. Follow these steps to set up your configuration:
-
-1. Create a `config.toml` file in the `config` directory (you can copy from the example):
+1. Copy config:
 
 ```bash
 cp config/config.example.toml config/config.toml
 ```
 
-2. Edit `config/config.toml` to add your API keys and customize settings:
+2. Set your model endpoint in `config/config.toml`.
 
-```toml
-# Global LLM configuration
-[llm]
-model = "gpt-4o"
-base_url = "https://api.openai.com/v1"
-api_key = "sk-..."  # Replace with your actual API key
-max_tokens = 4096
-temperature = 0.0
-
-# Optional configuration for specific LLM models
-[llm.vision]
-model = "gpt-4o"
-base_url = "https://api.openai.com/v1"
-api_key = "sk-..."  # Replace with your actual API key
-```
-
-## Quick Start
-
-One line for run OpenManus:
+3. Start:
 
 ```bash
+docker compose up --build
+```
+
+4. Open:
+
+- Frontend: `http://localhost:3000`
+- API: `http://localhost:8000`
+
+## Local Python Start
+
+```bash
+uv venv --python 3.12
+source .venv/bin/activate
+uv pip install -r requirements.txt
 python main.py
 ```
 
-Then input your idea via terminal!
+## Configuration
 
-For MCP tool version, you can run:
-```bash
-python run_mcp.py
-```
+Main file: `config/config.toml`
 
-For unstable multi-agent version, you also can run:
+Important sections:
 
-```bash
-python run_flow.py
-```
+- `[llm]` model, endpoint, key, token limits
+- `[sandbox]` runtime limits and network/socket access
+- `[agent]` max steps and tool-call behavior
+- `[rl]` optional policy integration
 
-### Custom Adding Multiple Agents
-
-Currently, besides the general OpenManus Agent, we have also integrated the DataAnalysis Agent, which is suitable for data analysis and data visualization tasks. You can add this agent to `run_flow` in `config.toml`.
+Example RL toggle:
 
 ```toml
-# Optional configuration for run-flow
-[runflow]
-use_data_analysis_agent = true     # Disabled by default, change to true to activate
+[rl]
+enabled = true
+policy_mode = "rl"
+policy_path = "research/openmanus-rl/artifacts/policy/latest/policy.md"
+metadata_path = "research/openmanus-rl/artifacts/policy/latest/metadata.json"
 ```
-In addition, you need to install the relevant dependencies to ensure the agent runs properly: [Detailed Installation Guide](app/tool/chart_visualization/README.md##Installation)
 
-## How to contribute
+## RL Scaffold
 
-We welcome any friendly suggestions and helpful contributions! Just create issues or submit pull requests.
+This repo includes a clean path for OpenManus-RL style integration:
 
-Or contact @mannaandpoem via 📧email: mannaandpoem@gmail.com
+- `research/openmanus-rl/`
+- `app/agent/policy_loader.py`
+- `scripts/export_policy.py`
 
-**Note**: Before submitting a pull request, please use the pre-commit tool to check your changes. Run `pre-commit run --all-files` to execute the checks.
+Example:
 
-## Community Group
-Join our networking group on Feishu and share your experience with other developers!
-
-<div align="center" style="display: flex; gap: 20px;">
-    <img src="assets/community_group.jpg" alt="OpenManus 交流群" width="300" />
-</div>
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=FoundationAgents/OpenManus&type=Date)](https://star-history.com/#FoundationAgents/OpenManus&Date)
-
-## Sponsors
-Thanks to [PPIO](https://ppinfra.com/user/register?invited_by=OCPKCN&utm_source=github_openmanus&utm_medium=github_readme&utm_campaign=link) for computing source support.
-> PPIO: The most affordable and easily-integrated MaaS and GPU cloud solution.
-
-
-## Acknowledgement
-
-Thanks to [anthropic-computer-use](https://github.com/anthropics/anthropic-quickstarts/tree/main/computer-use-demo), [browser-use](https://github.com/browser-use/browser-use) and [crawl4ai](https://github.com/unclecode/crawl4ai) for providing basic support for this project!
-
-Additionally, we are grateful to [AAAJ](https://github.com/metauto-ai/agent-as-a-judge), [MetaGPT](https://github.com/geekan/MetaGPT), [OpenHands](https://github.com/All-Hands-AI/OpenHands) and [SWE-agent](https://github.com/SWE-agent/SWE-agent).
-
-We also thank stepfun(阶跃星辰) for supporting our Hugging Face demo space.
-
-OpenManus is built by contributors from MetaGPT. Huge thanks to this agent community!
-
-## Cite
-```bibtex
-@misc{openmanus2025,
-  author = {Xinbin Liang and Jinyu Xiang and Zhaoyang Yu and Jiayi Zhang and Sirui Hong and Sheng Fan and Xiao Tang and Bang Liu and Yuyu Luo and Chenglin Wu},
-  title = {OpenManus: An open-source framework for building general AI agents},
-  year = {2025},
-  publisher = {Zenodo},
-  doi = {10.5281/zenodo.15186407},
-  url = {https://doi.org/10.5281/zenodo.15186407},
-}
+```bash
+python scripts/export_policy.py \
+  --policy-file /path/to/policy.md \
+  --model qwen3.6-35b-a3b \
+  --benchmark gaia \
+  --run-id exp-2026-05-14
 ```
+
+## Contributing
+
+Contributions are very welcome.
+
+- Open an issue for bugs or feature proposals
+- Keep PRs focused and easy to review
+- Add verification steps in your PR description
+
+### Maintainer Commitment
+
+I actively monitor this repo and **I will respond to pull requests quickly**.
+If your PR is blocked, tag me in the thread and I’ll help unblock it fast.
+
+### Suggested Team Flow
+
+1. Create feature branches from `main`
+2. Open PRs early (draft PRs are welcome)
+3. Merge after review + verification
+
+## Runtime Notes
+
+- Sandboxes are scoped to conversation lifecycle.
+- Protected system processes/containers are not killable by runtime controls.
+- Deleting a conversation clears associated task records, streams, and sandbox state.
+
+## License
+
+MIT (same as project root license).

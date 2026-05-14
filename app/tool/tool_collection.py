@@ -69,3 +69,9 @@ class ToolCollection:
         for tool in tools:
             self.add_tool(tool)
         return self
+
+    def without(self, disabled_tool_names: set[str]):
+        """Return a new collection without disabled tool names."""
+        return ToolCollection(
+            *(tool for tool in self.tools if tool.name not in disabled_tool_names)
+        )

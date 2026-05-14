@@ -4,6 +4,7 @@ from typing import Any, List, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.config import config
 from app.llm import LLM
 from app.sandbox.client import SANDBOX_CLIENT
 from app.schema import ROLE_TYPE, AgentState, Memory, Message
@@ -41,7 +42,9 @@ class BaseAgent(BaseModel, ABC):
     )
 
     # Execution control
-    max_steps: int = Field(default=10, description="Maximum steps before termination")
+    max_steps: int = Field(
+        default=config.agent.max_steps, description="Maximum steps before termination"
+    )
     current_step: int = Field(default=0, description="Current step in execution")
 
     duplicate_threshold: int = 2
@@ -131,6 +134,10 @@ class BaseAgent(BaseModel, ABC):
         results: List[str] = []
         try:
             async with self.state_context(AgentState.RUNNING):
+                task.emit(
+                    "agent_state",
+                    {"state": "running", "agent": self.name},
+                )
                 while (
                     self.current_step < self.max_steps
                     and self.state != AgentState.FINISHED
@@ -161,9 +168,25 @@ class BaseAgent(BaseModel, ABC):
                         f"Terminated: Reached max steps ({self.max_steps})"
                     )
                     results.append(termination_msg)
-                    task.emit("terminated", {"reason": termination_msg})
+                    task.emit(
+                        "terminated",
+                        {
+                            "reason": termination_msg,
+                            "status": "stuck",
+                            "message": "Agent stopped because it reached the configured step limit.",
+                        },
+                    )
             return "\n".join(results) if results else "No steps executed"
         finally:
+            task.emit(
+                "agent_state",
+                {
+                    "state": str(
+                        self.state.value if hasattr(self.state, "value") else self.state
+                    ),
+                    "agent": self.name,
+                },
+            )
             await SANDBOX_CLIENT.cleanup()
 
     @abstractmethod
@@ -180,7 +203,10 @@ class BaseAgent(BaseModel, ABC):
         self.next_step_prompt = f"{stuck_prompt}\n{self.next_step_prompt}"
         task.emit(
             "stuck_detected",
-            {"message": "Agent detected stuck state. Strategy prompt injected."},
+            {
+                "state": "stuck",
+                "message": "Agent detected repeated responses and injected a strategy-change prompt.",
+            },
         )
 
     def is_stuck(self) -> bool:

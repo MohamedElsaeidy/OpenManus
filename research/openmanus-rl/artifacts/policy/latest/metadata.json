@@ -1,0 +1,6 @@
+{
+  "run_id": "bootstrap",
+  "model": "base",
+  "benchmark": "none",
+  "notes": "placeholder metadata for RL policy integration"
+}

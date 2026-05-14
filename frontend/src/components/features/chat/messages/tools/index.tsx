@@ -9,7 +9,7 @@ type ToolCall = {
   type: 'function';
   function: {
     name: string;
-    arguments: Record<string, any>;
+    arguments: Record<string, unknown> | string;
   };
 };
 
@@ -40,12 +40,12 @@ export const ToolMessageContent = ({ message }: { message: AggregatedMessage & {
       <div className="flex flex-wrap gap-2">
         {toolSelectedMessage?.content.tool_calls &&
           toolSelectedMessage.content.tool_calls.map((toolCall: ToolCall) => {
-            const actToolMessage = actMessage?.messages.find(m => m.type === 'agent:lifecycle:step:act:tool') as AggregatedMessage & {
+            const actToolMessages = (actMessage?.messages.filter(m => m.type === 'agent:lifecycle:step:act:tool') || []) as (AggregatedMessage & {
               type: 'agent:lifecycle:step:act:tool';
-            };
-            const executeComplete = actToolMessage?.messages.find(
-              m => m.type === 'agent:lifecycle:step:act:tool:execute:complete' && m.content.id === toolCall.id,
-            );
+            })[];
+            const executeComplete = actToolMessages
+              .flatMap(m => m.messages)
+              .find(m => m.type === 'agent:lifecycle:step:act:tool:execute:complete' && m.content.id === toolCall.id);
 
             const { toolName, functionName } = getToolByPrefix(toolCall.function.name);
 

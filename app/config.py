@@ -66,6 +66,32 @@ class RunflowSettings(BaseModel):
     )
 
 
+class AgentSettings(BaseModel):
+    max_steps: int = Field(default=120, description="Maximum steps for agent execution")
+    max_tools_per_step: int = Field(
+        default=6, description="Maximum number of tool calls executed in one step"
+    )
+
+
+class RLSettings(BaseModel):
+    enabled: bool = Field(
+        default=False,
+        description="Enable RL policy hints for agent execution",
+    )
+    policy_mode: str = Field(
+        default="base",
+        description="Policy mode selector: base or rl",
+    )
+    policy_path: str = Field(
+        default="research/openmanus-rl/artifacts/policy/latest/policy.md",
+        description="Path to policy markdown relative to repository root",
+    )
+    metadata_path: str = Field(
+        default="research/openmanus-rl/artifacts/policy/latest/metadata.json",
+        description="Path to policy metadata JSON relative to repository root",
+    )
+
+
 class BrowserSettings(BaseModel):
     headless: bool = Field(False, description="Whether to run browser in headless mode")
     disable_security: bool = Field(
@@ -103,10 +129,13 @@ class SandboxSettings(BaseModel):
     network_enabled: bool = Field(
         False, description="Whether network access is allowed"
     )
+    docker_socket_enabled: bool = Field(
+        True, description="Mount host Docker socket into the sandbox"
+    )
 
 
 class DaytonaSettings(BaseModel):
-    daytona_api_key: str
+    daytona_api_key: Optional[str] = None
     daytona_server_url: Optional[str] = Field(
         "https://app.daytona.io/api", description=""
     )
@@ -188,6 +217,12 @@ class AppConfig(BaseModel):
     )
     daytona_config: Optional[DaytonaSettings] = Field(
         None, description="Daytona configuration"
+    )
+    agent: Optional[AgentSettings] = Field(
+        default_factory=AgentSettings, description="Agent execution settings"
+    )
+    rl: Optional[RLSettings] = Field(
+        default_factory=RLSettings, description="RL integration settings"
     )
 
     class Config:
@@ -324,6 +359,8 @@ class Config:
             "mcp_config": mcp_settings,
             "run_flow_config": run_flow_settings,
             "daytona_config": daytona_settings,
+            "agent": AgentSettings(**raw_config.get("agent", {})),
+            "rl": RLSettings(**raw_config.get("rl", {})),
         }
 
         self._config = AppConfig(**config_dict)
@@ -357,6 +394,16 @@ class Config:
     def run_flow_config(self) -> RunflowSettings:
         """Get the Run Flow configuration"""
         return self._config.run_flow_config
+
+    @property
+    def agent(self) -> AgentSettings:
+        """Get the Agent configuration"""
+        return self._config.agent
+
+    @property
+    def rl(self) -> RLSettings:
+        """Get the RL integration configuration"""
+        return self._config.rl
 
     @property
     def workspace_root(self) -> Path:

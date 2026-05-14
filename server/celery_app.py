@@ -8,7 +8,12 @@ backend_url = os.getenv(
     "CELERY_RESULT_BACKEND", os.getenv("DATABASE_URL", "redis://redis:6379/0")
 )
 
-celery_app = Celery("openmanus", broker=broker_url, backend=backend_url)
+celery_app = Celery(
+    "openmanus",
+    broker=broker_url,
+    backend=backend_url,
+    include=["server.tasks"],
+)
 
 celery_app.conf.update(
     task_serializer="json",

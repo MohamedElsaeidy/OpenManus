@@ -1,19 +1,38 @@
-version: "3.9"
-
 services:
+  frontend:
+    build:
+      context: ./frontend
+    image: openmanus-frontend:latest
+    ports:
+      - "3000:5173"
+    depends_on:
+      - web
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+
   web:
     build: .
     image: openmanus-web:latest
-    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    command: uvicorn server.api:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
     environment:
       - DATABASE_URL=postgresql+psycopg2://postgres:postgres@postgres:5432/openmanus
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - OPENMANUS_HOST_WORKSPACE_ROOT=/home/mohamed/OpenManus/workspace
+      - OPENMANUS_SINGLE_CONVERSATION=false
+      - OPENMANUS_DEFAULT_CONVERSATION_ID=main
     depends_on:
       - postgres
       - redis
+    volumes:
+      - ./config:/app/config
+      - ./app:/app/app
+      - ./server:/app/server
+      - ./workspace:/app/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
 
   worker:
     build: .
@@ -23,9 +42,18 @@ services:
       - DATABASE_URL=postgresql+psycopg2://postgres:postgres@postgres:5432/openmanus
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - OPENMANUS_HOST_WORKSPACE_ROOT=/home/mohamed/OpenManus/workspace
+      - OPENMANUS_SINGLE_CONVERSATION=false
+      - OPENMANUS_DEFAULT_CONVERSATION_ID=main
     depends_on:
       - postgres
       - redis
+    volumes:
+      - ./config:/app/config
+      - ./app:/app/app
+      - ./server:/app/server
+      - ./workspace:/app/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
 
   redis:
     image: redis:latest
