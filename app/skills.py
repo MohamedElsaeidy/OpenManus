@@ -105,7 +105,9 @@ def load_skills(workspace_root: str | Path | None = None) -> list[Skill]:
     return skills
 
 
-def select_skills(prompt: str, workspace_root: str | Path | None = None, limit: int = 6) -> list[Skill]:
+def select_skills(
+    prompt: str, workspace_root: str | Path | None = None, limit: int = 6
+) -> list[Skill]:
     skills = load_skills(workspace_root)
     always = [skill for skill in skills if skill.type == "repo" or not skill.triggers]
     matched = [skill for skill in skills if skill.triggers and skill.matches(prompt)]
@@ -125,4 +127,7 @@ def format_skill_context(skills: Iterable[Skill]) -> str:
         chunks.append(f"Skill: {skill.name}\n{skill.body}")
     if not chunks:
         return ""
-    return "Relevant OpenHands-style skills loaded for this conversation:\n\n" + "\n\n---\n\n".join(chunks)
+    return (
+        "Relevant OpenHands-style skills loaded for this conversation:\n\n"
+        + "\n\n---\n\n".join(chunks)
+    )

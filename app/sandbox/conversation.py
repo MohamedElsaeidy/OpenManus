@@ -42,7 +42,9 @@ class ConversationSandbox:
     async def ensure(self) -> "ConversationSandbox":
         self.host_workspace.mkdir(parents=True, exist_ok=True)
         try:
-            self.container = await asyncio.to_thread(self.client.containers.get, self.name)
+            self.container = await asyncio.to_thread(
+                self.client.containers.get, self.name
+            )
             await self._start_if_needed()
             return self
         except NotFound:
@@ -88,7 +90,9 @@ class ConversationSandbox:
 
     async def status(self) -> dict[str, Any]:
         try:
-            self.container = await asyncio.to_thread(self.client.containers.get, self.name)
+            self.container = await asyncio.to_thread(
+                self.client.containers.get, self.name
+            )
         except NotFound:
             return {"exists": False, "status": "missing", "container": None}
         await asyncio.to_thread(self.container.reload)
@@ -98,7 +102,9 @@ class ConversationSandbox:
             "container": {
                 "id": self.container.short_id,
                 "name": self.container.name,
-                "image": ",".join(self.container.image.tags) if self.container.image.tags else self.container.image.short_id,
+                "image": ",".join(self.container.image.tags)
+                if self.container.image.tags
+                else self.container.image.short_id,
             },
         }
 
@@ -108,7 +114,9 @@ class ConversationSandbox:
 
     async def resume(self) -> None:
         try:
-            self.container = await asyncio.to_thread(self.client.containers.get, self.name)
+            self.container = await asyncio.to_thread(
+                self.client.containers.get, self.name
+            )
         except NotFound:
             await self.ensure()
             return
@@ -120,7 +128,9 @@ class ConversationSandbox:
 
     async def delete(self) -> None:
         try:
-            self.container = await asyncio.to_thread(self.client.containers.get, self.name)
+            self.container = await asyncio.to_thread(
+                self.client.containers.get, self.name
+            )
         except NotFound:
             return
         await asyncio.to_thread(self.container.remove, force=True)
@@ -167,9 +177,7 @@ class ConversationSandbox:
             exec_id = exec_data["Id"]
             stdout_parts: list[str] = []
             stderr_parts: list[str] = []
-            for stdout, stderr in self.api.exec_start(
-                exec_id, stream=True, demux=True
-            ):
+            for stdout, stderr in self.api.exec_start(exec_id, stream=True, demux=True):
                 if stdout:
                     text = stdout.decode("utf-8", errors="replace")
                     stdout_parts.append(text)
@@ -281,7 +289,9 @@ class ConversationSandbox:
                     "args": args,
                     "ports": listen_ports.get(int(pid), []),
                     "zombie": "Z" in stat,
-                    "protected": int(pid) == 1 or args == "tail -f /dev/null" or "Z" in stat,
+                    "protected": int(pid) == 1
+                    or args == "tail -f /dev/null"
+                    or "Z" in stat,
                 }
             )
         return processes
@@ -330,7 +340,9 @@ class ConversationSandbox:
             port_match = re.search(r":(\d+)$", address)
             if not pid_match or not port_match:
                 continue
-            ports_by_pid.setdefault(int(pid_match.group(1)), []).append(port_match.group(1))
+            ports_by_pid.setdefault(int(pid_match.group(1)), []).append(
+                port_match.group(1)
+            )
         return ports_by_pid
 
     async def kill_process(self, pid: int, signal: str = "TERM") -> None:
@@ -347,11 +359,8 @@ class ConversationSandbox:
     async def list_docker_containers(self) -> list[dict[str, Any]]:
         """Return Docker containers visible from the sandbox Docker socket."""
         await self.ensure()
-        command = (
-            "docker ps --format "
-            + shlex.quote(
-                "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Command}}"
-            )
+        command = "docker ps --format " + shlex.quote(
+            "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Command}}"
         )
         code, stdout, _ = await self.run(command, timeout=15)
         if code != 0:

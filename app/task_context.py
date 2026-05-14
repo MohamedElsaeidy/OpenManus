@@ -6,9 +6,7 @@ current_task: ContextVar[Optional[Any]] = ContextVar("current_task", default=Non
 current_tool_call: ContextVar[Optional[dict]] = ContextVar(
     "current_tool_call", default=None
 )
-current_sandbox: ContextVar[Optional[Any]] = ContextVar(
-    "current_sandbox", default=None
-)
+current_sandbox: ContextVar[Optional[Any]] = ContextVar("current_sandbox", default=None)
 current_workspace: ContextVar[Optional[str]] = ContextVar(
     "current_workspace", default=None
 )

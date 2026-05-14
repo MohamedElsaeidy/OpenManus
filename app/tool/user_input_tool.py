@@ -39,13 +39,17 @@ class WaitForUserInput(BaseTool):
     ) -> ToolResult:
         task = get_current_task()
         if task is None or not getattr(task, "id", None):
-            return ToolResult(output="No active task inbox is available; continue autonomously.")
+            return ToolResult(
+                output="No active task inbox is available; continue autonomously."
+            )
 
         timeout = max(1, min(timeout_seconds or 30, 300))
         inbox_key = f"task:{task.id}:inbox"
 
         if message:
-            task.emit("user_input_wait", {"message": message, "timeout_seconds": timeout})
+            task.emit(
+                "user_input_wait", {"message": message, "timeout_seconds": timeout}
+            )
 
         def _wait_for_message():
             client = redis_lib.from_url(REDIS_URL, decode_responses=True)

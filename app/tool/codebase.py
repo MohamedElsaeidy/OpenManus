@@ -57,7 +57,9 @@ def _truncate(text: str, max_chars: int = MAX_OUTPUT_CHARS) -> str:
 def _walk_files(root: Path) -> Iterable[Path]:
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [
-            name for name in dirnames if name not in DEFAULT_IGNORES and not name.startswith(".")
+            name
+            for name in dirnames
+            if name not in DEFAULT_IGNORES and not name.startswith(".")
         ]
         for filename in filenames:
             if filename.startswith("."):
@@ -103,7 +105,9 @@ class GlobSearch(BaseTool):
         results: list[str] = []
         for file_path in _walk_files(root):
             rel = file_path.relative_to(root)
-            if fnmatch.fnmatch(str(rel), pattern) or fnmatch.fnmatch(file_path.name, pattern):
+            if fnmatch.fnmatch(str(rel), pattern) or fnmatch.fnmatch(
+                file_path.name, pattern
+            ):
                 results.append(str(rel))
                 if len(results) >= limit:
                     break
@@ -233,8 +237,14 @@ class ReadFiles(BaseTool):
                 "items": {"type": "string"},
                 "description": "File paths to read. Relative paths resolve from the current conversation workspace.",
             },
-            "start_line": {"type": "integer", "description": "Optional 1-based start line."},
-            "end_line": {"type": "integer", "description": "Optional inclusive end line."},
+            "start_line": {
+                "type": "integer",
+                "description": "Optional 1-based start line.",
+            },
+            "end_line": {
+                "type": "integer",
+                "description": "Optional inclusive end line.",
+            },
             "max_chars_per_file": {
                 "type": "integer",
                 "description": "Maximum characters per file. Defaults to 12000.",
@@ -261,7 +271,9 @@ class ReadFiles(BaseTool):
             paths = [path, *paths]
 
         if not paths:
-            return ToolResult(error="At least one path is required via 'path' or 'paths'")
+            return ToolResult(
+                error="At least one path is required via 'path' or 'paths'"
+            )
 
         limit = max(1000, min(max_chars_per_file or 12000, 50000))
         sections: list[str] = []
@@ -283,7 +295,8 @@ class ReadFiles(BaseTool):
             start = max(1, start_line or 1)
             end = min(len(lines), end_line or len(lines))
             numbered = [
-                f"{line_no:>5}\t{lines[line_no - 1]}" for line_no in range(start, end + 1)
+                f"{line_no:>5}\t{lines[line_no - 1]}"
+                for line_no in range(start, end + 1)
             ]
             content = "\n".join(numbered)
             sections.append(f"== {file_path} ==\n{_truncate(content, limit)}")
@@ -321,7 +334,9 @@ class CodebaseOverview(BaseTool):
             return ToolResult(error=f"Path does not exist: {root}")
 
         limit = max(20, min(max_files or 120, 500))
-        files = sorted(_walk_files(root), key=lambda p: str(p.relative_to(root)))[:limit]
+        files = sorted(_walk_files(root), key=lambda p: str(p.relative_to(root)))[
+            :limit
+        ]
         rel_files = [str(file_path.relative_to(root)) for file_path in files]
         names = {Path(p).name for p in rel_files}
         suffixes = {Path(p).suffix for p in rel_files}
@@ -329,7 +344,11 @@ class CodebaseOverview(BaseTool):
         commands: list[str] = []
         if "package.json" in names:
             commands.extend(["npm run build", "npm test"])
-        if "pyproject.toml" in names or "pytest.ini" in names or "requirements.txt" in names:
+        if (
+            "pyproject.toml" in names
+            or "pytest.ini" in names
+            or "requirements.txt" in names
+        ):
             commands.append("pytest -q")
         if "Cargo.toml" in names:
             commands.extend(["cargo test", "cargo clippy"])

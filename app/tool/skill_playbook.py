@@ -104,15 +104,16 @@ class SkillPlaybook(BaseTool):
     }
 
     async def execute(
-        self, skill: Optional[str] = None, task: Optional[str] = None, list_available: bool = False, **kwargs
+        self,
+        skill: Optional[str] = None,
+        task: Optional[str] = None,
+        list_available: bool = False,
+        **kwargs,
     ) -> ToolResult:
         workspace = get_current_workspace()
         discovered = load_skills(workspace)
         if list_available:
-            names = [
-                f"- {name} (built-in)"
-                for name in sorted(SKILLS.keys())
-            ]
+            names = [f"- {name} (built-in)" for name in sorted(SKILLS.keys())]
             names.extend(
                 f"- {item.name} ({item.type}; triggers: {', '.join(item.triggers or []) or 'always'})"
                 for item in discovered
