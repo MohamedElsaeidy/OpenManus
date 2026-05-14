@@ -9,9 +9,14 @@ from app.agent.base import Task, TaskInterrupted
 from app.agent.react import ReActAgent
 from app.config import config
 from app.exceptions import TokenLimitExceeded
+from app.llm import MULTIMODAL_MODELS
 from app.prompt.toolcall import NEXT_STEP_PROMPT, SYSTEM_PROMPT
 from app.schema import TOOL_CHOICE_TYPE, AgentState, Message, ToolCall, ToolChoice
 from app.task_context import current_tool_call
+from app.task_context import (
+    get_current_auto_context_compress,
+    get_current_requested_context_window,
+)
 from app.tool import CreateChatCompletion, Terminate, ToolCollection
 from app.tool.browser_use_tool import BrowserUseTool
 from context.engine import ContextEngine
@@ -86,6 +91,7 @@ class ToolCallAgent(ReActAgent):
                 if self.system_prompt
                 else [context_msg]
             )
+            self._maybe_compress_context(task, system_msgs)
 
             response = await self.llm.ask_tool(
                 messages=self.messages,
@@ -287,6 +293,60 @@ class ToolCallAgent(ReActAgent):
         if not names:
             return False
         return all(name in OBSERVE_ONLY_TOOLS for name in names)
+
+    def _maybe_compress_context(self, task: Task, system_msgs: List[Message]) -> None:
+        if not get_current_auto_context_compress():
+            return
+        requested_window = get_current_requested_context_window()
+        if requested_window is None or requested_window <= 0:
+            requested_window = self.llm.max_input_tokens
+        if requested_window is None or requested_window <= 0:
+            return
+        if len(self.messages) < 30:
+            return
+        try:
+            supports_images = self.llm.active_model in MULTIMODAL_MODELS
+            formatted_system = self.llm.format_messages(system_msgs, supports_images)
+            formatted_messages = self.llm.format_messages(self.messages, supports_images)
+            total_tokens = self.llm.count_message_tokens(formatted_system + formatted_messages)
+        except Exception:
+            return
+
+        ratio = total_tokens / max(1, requested_window)
+        if ratio < 0.9:
+            return
+
+        keep_recent = 24
+        older = self.messages[:-keep_recent]
+        recent = self.messages[-keep_recent:]
+        if not older:
+            return
+
+        lines: list[str] = []
+        for msg in older[-80:]:
+            role = str(msg.role)
+            text = (msg.content or "").replace("\n", " ").strip()
+            if not text:
+                continue
+            if len(text) > 220:
+                text = text[:220] + "..."
+            lines.append(f"- {role}: {text}")
+
+        summary = (
+            "Compressed conversation memory to preserve context window. "
+            "Use this as persistent prior state:\n" + "\n".join(lines[-60:])
+        )
+        self.memory.messages = [Message.system_message(summary), *recent]
+        task.emit(
+            "context_compressed",
+            {
+                "before_tokens": total_tokens,
+                "requested_window": requested_window,
+                "usage_ratio": round(ratio, 4),
+                "kept_recent_messages": keep_recent,
+                "compressed_messages": max(0, len(older)),
+            },
+        )
 
     async def act(self, task: Task) -> str:
         """Execute tool calls and handle their results."""

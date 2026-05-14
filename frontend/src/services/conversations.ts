@@ -5,7 +5,16 @@ export interface Conversation {
   model?: string | null;
   settings?: {
     disabled_tools?: string[];
+    requested_context_window?: number;
+    auto_context_compress?: boolean;
   };
+  context?: {
+    requested_window?: number | null;
+    current_input_tokens?: number;
+    usage_ratio?: number | null;
+    is_near_limit?: boolean;
+    auto_context_compress?: boolean;
+  } | null;
   latest_task_id?: string | null;
   latest_status?: string | null;
   state?: 'idle' | 'running' | 'paused' | 'waiting' | 'finished' | 'error' | 'stuck';
@@ -84,6 +93,25 @@ export interface SkillSummary {
   version: string;
   agent: string;
   triggers: string[];
+}
+
+export interface ObsidianGraph {
+  conversation_id: string;
+  node_count: number;
+  edge_count: number;
+  nodes: Array<{
+    id: string;
+    path: string;
+    title: string;
+    tags?: string[];
+    updated_at?: string | null;
+  }>;
+  edges: Array<{
+    id: string;
+    source: string;
+    target: string;
+    relation: string;
+  }>;
 }
 
 export async function listConversations(): Promise<{ conversations: Conversation[] }> {
@@ -172,6 +200,14 @@ export async function listSkills(conversationId?: string): Promise<{ skills: Ski
   return response.json();
 }
 
+export async function getObsidianGraph(conversationId: string): Promise<ObsidianGraph> {
+  const response = await fetch(`/api/conversations/${conversationId}/obsidian/graph`, {
+    credentials: 'same-origin',
+  });
+  if (!response.ok) throw new Error('Could not load vault graph');
+  return response.json();
+}
+
 export async function sendConversationMessage(
   conversationId: string,
   message: string,
@@ -200,7 +236,12 @@ export async function deleteConversation(conversationId: string): Promise<void> 
 
 export async function updateConversationSettings(
   conversationId: string,
-  settings: { model?: string; disabled_tools?: string[] },
+  settings: {
+    model?: string;
+    disabled_tools?: string[];
+    requested_context_window?: number | null;
+    auto_context_compress?: boolean;
+  },
 ): Promise<Conversation> {
   const response = await fetch(`/api/conversations/${conversationId}/settings`, {
     method: 'PUT',

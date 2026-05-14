@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -14,8 +15,10 @@ from app.runtime_settings import get_disabled_tools, get_llm_connection
 from app.sandbox.conversation import ConversationSandbox
 from app.skills import format_skill_context, select_skills
 from app.task_context import (
+    current_auto_context_compress,
     current_llm_connection,
     current_model,
+    current_requested_context_window,
     current_sandbox,
     current_task,
     current_workspace,
@@ -23,7 +26,7 @@ from app.task_context import (
 from core.task import TaskStatus
 from core.task_registry import TaskRegistry
 from server.celery_app import celery_app
-from server.models import ConversationEventORM, TaskORM
+from server.models import ConversationEventORM, ObsidianEdgeORM, ObsidianNoteORM, TaskORM
 
 
 registry = TaskRegistry()
@@ -31,6 +34,8 @@ registry = TaskRegistry()
 REDIS_URL = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0")
 DEFAULT_CONVERSATION_ID = os.getenv("OPENMANUS_DEFAULT_CONVERSATION_ID", "main")
 _redis_client: Optional[redis_lib.Redis] = None
+WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:[^\]]*)\]\]")
+TAG_RE = re.compile(r"(^|\s)#([A-Za-z0-9_\-\/]+)")
 
 
 def get_redis() -> redis_lib.Redis:
@@ -131,6 +136,32 @@ def get_task_disabled_tools(task_id: str) -> set[str]:
     return {str(name) for name in task_input.get("disabled_tools", [])}
 
 
+def get_task_requested_context_window(task_id: str) -> Optional[int]:
+    orm = get_task_record(task_id)
+    if orm is None:
+        return None
+    task_input = orm.input or {}
+    raw = task_input.get("requested_context_window")
+    if raw in (None, ""):
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def get_task_auto_context_compress(task_id: str) -> bool:
+    orm = get_task_record(task_id)
+    if orm is None:
+        return True
+    task_input = orm.input or {}
+    raw = task_input.get("auto_context_compress")
+    if raw is None:
+        return True
+    return bool(raw)
+
+
 def conversation_workspace(conversation_id: str) -> Path:
     return (
         Path(os.getenv("OPENMANUS_WORKSPACE_ROOT", "/app/workspace"))
@@ -204,6 +235,128 @@ def build_conversation_context(
     return "\n".join(lines)
 
 
+def build_obsidian_context(conversation_id: str, max_notes: int = 6) -> str:
+    """Build compact persisted Obsidian context from DB notes."""
+    with registry.SessionLocal() as session:
+        rows = (
+            session.query(ObsidianNoteORM)
+            .filter(ObsidianNoteORM.conversation_id == uuid.UUID(str(conversation_id)))
+            .order_by(ObsidianNoteORM.updated_at.desc())
+            .limit(max(1, min(max_notes, 20)))
+            .all()
+        )
+
+    if not rows:
+        return ""
+
+    lines = [
+        "Persistent vault context (Obsidian import):",
+        "- Use these notes as durable long-term memory for this conversation.",
+    ]
+    for note in rows:
+        snippet = (note.content or "").replace("\n", " ").strip()
+        if len(snippet) > 280:
+            snippet = snippet[:280] + "..."
+        tags = ", ".join(str(tag) for tag in (note.tags or [])[:6])
+        tags_part = f" | tags: {tags}" if tags else ""
+        lines.append(f"- {note.title} ({note.path}){tags_part}: {snippet}")
+    return "\n".join(lines)
+
+
+def auto_sync_obsidian_notes(conversation_id: str, workspace_root: Path) -> None:
+    """Automatically sync markdown notes from workspace into obsidian_notes + graph edges."""
+    if not workspace_root.exists():
+        return
+    markdown_files = [
+        path
+        for path in workspace_root.rglob("*.md")
+        if path.is_file()
+        and ".git/" not in str(path)
+        and "node_modules/" not in str(path)
+        and ".venv/" not in str(path)
+    ][:200]
+    if not markdown_files:
+        return
+
+    cid = uuid.UUID(str(conversation_id))
+    with registry.SessionLocal() as session:
+        existing_notes = (
+            session.query(ObsidianNoteORM)
+            .filter(ObsidianNoteORM.conversation_id == cid)
+            .all()
+        )
+        by_path = {note.path: note for note in existing_notes}
+        by_title = {note.title: note for note in existing_notes}
+        touched_paths: set[str] = set()
+        touched_notes: list[ObsidianNoteORM] = []
+
+        for file_path in markdown_files:
+            rel = str(file_path.relative_to(workspace_root))
+            touched_paths.add(rel)
+            try:
+                content = file_path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            lines = content.splitlines()
+            first_heading = next(
+                (
+                    line.lstrip("# ").strip()
+                    for line in lines
+                    if line.strip().startswith("#") and line.lstrip("# ").strip()
+                ),
+                "",
+            )
+            title = first_heading or file_path.stem
+            tags = sorted({match[1] for match in TAG_RE.findall(content)})[:40]
+            note = by_path.get(rel)
+            if note is None:
+                note = ObsidianNoteORM(
+                    conversation_id=cid,
+                    path=rel,
+                    title=title,
+                    content=content,
+                    tags=tags,
+                    meta={"source": "workspace-auto-sync"},
+                )
+                session.add(note)
+            else:
+                note.title = title
+                note.content = content
+                note.tags = tags
+                note.meta = {"source": "workspace-auto-sync"}
+            by_path[rel] = note
+            by_title[title] = note
+            touched_notes.append(note)
+
+        session.flush()
+
+        # keep manually imported notes untouched; only remove old auto-synced missing files
+        for old in existing_notes:
+            source = (old.meta or {}).get("source")
+            if source == "workspace-auto-sync" and old.path not in touched_paths:
+                session.delete(old)
+
+        session.query(ObsidianEdgeORM).filter(
+            ObsidianEdgeORM.conversation_id == cid
+        ).delete()
+        for note in touched_notes:
+            content = note.content or ""
+            for link in WIKILINK_RE.findall(content):
+                target_name = str(link).strip()
+                target = by_title.get(target_name) or by_path.get(target_name)
+                if target is None:
+                    continue
+                session.add(
+                    ObsidianEdgeORM(
+                        conversation_id=cid,
+                        source_note_id=note.note_id,
+                        target_note_id=target.note_id,
+                        relation="wikilink",
+                    )
+                )
+        session.commit()
+
+
 class RedisEmittingTask:
     """
     Wraps a Task so that every emit() is also written to a Redis Stream.
@@ -241,6 +394,8 @@ def run_task(task_id: str, prompt: Optional[str] = None):
     conversation_id = get_conversation_id(task_id)
     model = get_task_model(task_id)
     disabled_tools = get_disabled_tools() | get_task_disabled_tools(task_id)
+    requested_context_window = get_task_requested_context_window(task_id)
+    auto_context_compress = get_task_auto_context_compress(task_id)
     llm_connection = get_llm_connection()
     workspace_root = conversation_workspace(conversation_id)
     host_workspace_root = host_conversation_workspace(conversation_id)
@@ -251,6 +406,12 @@ def run_task(task_id: str, prompt: Optional[str] = None):
         sandbox_token = None
         workspace_token = current_workspace.set(str(workspace_root))
         model_token = current_model.set(model)
+        requested_context_window_token = current_requested_context_window.set(
+            requested_context_window
+        )
+        auto_context_compress_token = current_auto_context_compress.set(
+            auto_context_compress
+        )
         llm_connection_token = current_llm_connection.set(llm_connection)
         if config.sandbox.use_sandbox:
             sandbox = await ConversationSandbox(
@@ -264,9 +425,11 @@ def run_task(task_id: str, prompt: Optional[str] = None):
         os.chdir(workspace_root)
         token = current_task.set(wrapped)
         try:
+            auto_sync_obsidian_notes(conversation_id, workspace_root)
             continuity = build_conversation_context(
                 task_id, conversation_id, workspace_root
             )
+            obsidian_context = build_obsidian_context(conversation_id)
             skill_context = format_skill_context(
                 select_skills(prompt or "", workspace_root)
             )
@@ -277,7 +440,11 @@ def run_task(task_id: str, prompt: Optional[str] = None):
                 skill_context = skill_context.replace(
                     str(workspace_root), config.sandbox.work_dir
                 )
-            context_parts = [part for part in (continuity, skill_context) if part]
+            context_parts = [
+                part
+                for part in (continuity, obsidian_context, skill_context)
+                if part
+            ]
             combined_context = "\n\n".join(context_parts)
             run_prompt = (
                 f"{combined_context}\n\nCurrent user request:\n{prompt}"
@@ -299,6 +466,8 @@ def run_task(task_id: str, prompt: Optional[str] = None):
                 current_sandbox.reset(sandbox_token)
             current_workspace.reset(workspace_token)
             current_model.reset(model_token)
+            current_requested_context_window.reset(requested_context_window_token)
+            current_auto_context_compress.reset(auto_context_compress_token)
             current_llm_connection.reset(llm_connection_token)
             os.chdir(previous_cwd)
 

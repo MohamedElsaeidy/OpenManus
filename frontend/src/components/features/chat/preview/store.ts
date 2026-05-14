@@ -7,7 +7,8 @@ export type PreviewData =
   | { type: 'runtime'; conversationId: string; tab?: 'processes' | 'ports' | 'containers' }
   | { type: 'terminal' }
   | { type: 'changes' }
-  | { type: 'skills'; conversationId?: string };
+  | { type: 'skills'; conversationId?: string }
+  | { type: 'vault'; conversationId: string };
 
 export const usePreviewData = create<{
   data: PreviewData | null;
