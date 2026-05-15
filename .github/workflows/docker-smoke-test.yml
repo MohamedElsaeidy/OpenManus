@@ -10,6 +10,21 @@ jobs:
   smoke:
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: openmanus
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -19,7 +34,9 @@ jobs:
 
       - name: Run container
         run: |
-          docker run -d -p 8000:8000 --name openmanus openmanus:latest
+          docker run -d --network host --name openmanus \
+            -e DATABASE_URL=postgresql+psycopg2://postgres:postgres@localhost:5432/openmanus \
+            openmanus:latest
           # start websocket server inside container on port 8001
           docker exec openmanus sh -c "uvicorn server.ws:app --host 0.0.0.0 --port 8001 --workers 1 >/tmp/ws.log 2>&1 & echo \$! >/tmp/ws.pid"
 
@@ -81,6 +98,12 @@ jobs:
               print("No events received"); sys.exit(1)
           print("Received events:", events)
           PY
+
+      - name: Dump container logs on failure
+        if: failure()
+        run: |
+          docker logs openmanus || true
+          docker exec openmanus cat /tmp/ws.log || true
 
       - name: Stop container
         if: always()
