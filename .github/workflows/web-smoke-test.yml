@@ -59,10 +59,10 @@ jobs:
           echo $! > server.pid
           sleep 5
 
-      - name: Check /health
+      - name: Check /api/health
         run: |
           for i in {1..10}; do
-            if curl -sf http://127.0.0.1:8000/health > /tmp/health.json; then
+            if curl -sf http://127.0.0.1:8000/api/health > /tmp/health.json; then
               cat /tmp/health.json
               exit 0
             fi

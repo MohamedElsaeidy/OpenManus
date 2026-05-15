@@ -28,8 +28,8 @@ jobs:
           docker compose up -d
           sleep 10
 
-      - name: Check /health
-        run: curl --fail http://127.0.0.1:8000/health
+      - name: Check /api/health
+        run: curl --fail http://127.0.0.1:8000/api/health
 
       - name: Check /docs
         run: curl --fail http://127.0.0.1:8000/docs

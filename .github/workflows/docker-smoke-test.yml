@@ -24,8 +24,8 @@ jobs:
           docker exec openmanus sh -c "uvicorn server.ws:app --host 0.0.0.0 --port 8001 --workers 1 >/tmp/ws.log 2>&1 & echo \$! >/tmp/ws.pid"
           sleep 8
 
-      - name: Check /health
-        run: curl --fail http://127.0.0.1:8000/health
+      - name: Check /api/health
+        run: curl --fail http://127.0.0.1:8000/api/health
 
       - name: Check /docs
         run: curl --fail http://127.0.0.1:8000/docs
