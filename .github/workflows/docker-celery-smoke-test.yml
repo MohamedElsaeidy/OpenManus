@@ -57,6 +57,10 @@ jobs:
           echo "Task did not complete in time"
           exit 1
 
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs
+          
       - name: Tear down
         if: always()
         run: docker compose down -v
