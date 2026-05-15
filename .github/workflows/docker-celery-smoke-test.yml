@@ -10,11 +10,6 @@ jobs:
   smoke:
     runs-on: ubuntu-latest
 
-    services:
-      docker:
-        image: docker:24.0.5-dind
-        privileged: true
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,7 +21,7 @@ jobs:
         run: |
           docker compose build
           docker compose up -d
-          
+
           # Wait for server to be ready with retries
           for i in {1..30}; do
             if curl -sf http://127.0.0.1:8000/api/health >/dev/null 2>&1; then
