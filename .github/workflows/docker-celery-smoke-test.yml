@@ -26,7 +26,16 @@ jobs:
         run: |
           docker compose build
           docker compose up -d
-          sleep 10
+          
+          # Wait for server to be ready with retries
+          for i in {1..30}; do
+            if curl -sf http://127.0.0.1:8000/api/health >/dev/null 2>&1; then
+              echo "Server is ready"
+              break
+            fi
+            echo "Waiting for server... attempt $i/30"
+            sleep 1
+          done
 
       - name: Check /api/health
         run: curl --fail http://127.0.0.1:8000/api/health
