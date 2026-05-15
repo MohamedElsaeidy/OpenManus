@@ -22,7 +22,7 @@ jobs:
           docker run -d -p 8000:8000 --name openmanus openmanus:latest
           # start websocket server inside container on port 8001
           docker exec openmanus sh -c "uvicorn server.ws:app --host 0.0.0.0 --port 8001 --workers 1 >/tmp/ws.log 2>&1 & echo \$! >/tmp/ws.pid"
-          
+
           # Wait for server to be ready with retries
           for i in {1..30}; do
             if curl -sf http://127.0.0.1:8000/api/health >/dev/null 2>&1; then
