@@ -79,7 +79,16 @@ done
 echo "[smoke] Starting FastAPI server..."
 uvicorn server.api:app --host 0.0.0.0 --port 8000 --workers 1 >"$SERVER_LOG" 2>&1 &
 echo $! >"$SERVER_PID_FILE"
-sleep 5
+
+# Wait for server to be ready with retries
+for i in {1..30}; do
+  if curl -sf http://127.0.0.1:8000/api/health >/dev/null 2>&1; then
+    echo "[smoke] Server is ready"
+    break
+  fi
+  echo "[smoke] Waiting for server... attempt $i/30"
+  sleep 1
+done
 
 echo "[smoke] Checking /api/health..."
 for i in {1..10}; do
