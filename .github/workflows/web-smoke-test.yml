@@ -7,6 +7,20 @@ on:
 jobs:
   smoke:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: openmanus
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
 
     steps:
       - name: Checkout
@@ -22,9 +36,26 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Start FastAPI server
+      - name: Wait for PostgreSQL
+        env:
+          PGPASSWORD: postgres
         run: |
-          uvicorn server.api:app --host 0.0.0.0 --port 8000 --workers 1 &
+          for i in {1..30}; do
+            if pg_isready -h localhost -U postgres -d openmanus; then
+              echo "PostgreSQL is ready"
+              exit 0
+            fi
+            echo "Waiting for PostgreSQL to be ready..."
+            sleep 1
+          done
+          echo "PostgreSQL not ready in time"
+          exit 1
+
+      - name: Start FastAPI server
+        env:
+          DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/openmanus
+        run: |
+          uvicorn server.api:app --host 0.0.0.0 --port 8000 --workers 1 > /tmp/server.log 2>&1 &
           echo $! > server.pid
           sleep 5
 
@@ -38,6 +69,7 @@ jobs:
             sleep 2
           done
           echo "Health endpoint not responding"
+          cat /tmp/server.log || true
           exit 1
 
       - name: Check /docs
