@@ -41,10 +41,10 @@ jobs:
       - name: Task create and poll
         run: |
           set -e
-          curl -s -c cookies.txt -X POST http://127.0.0.1:8000/api/auth/signup -H "Content-Type: application/json" -d "{\"email\":\"user$RANDOM@test.com\", \"password\":\"password\", \"name\":\"test\"}"
+          curl -s -o /dev/null -c cookies.txt -X POST http://127.0.0.1:8000/api/auth/signup -H "Content-Type: application/json" -d "{\"email\":\"user$RANDOM@test.com\", \"password\":\"password\", \"name\":\"test\"}"
           TASK_JSON=$(curl -b cookies.txt -s -X POST http://127.0.0.1:8000/api/tasks -H "Content-Type: application/json" -d '{"prompt":"ping"}')
           echo "Created: $TASK_JSON"
-          TASK_ID=$(echo "$TASK_JSON" | python -c "import sys, json; print(json.load(sys.stdin)['id'])")
+          TASK_ID=$(echo "$TASK_JSON" | python -c "import sys, json; print(json.load(sys.stdin)['task_id'])")
           if [ -z "$TASK_ID" ]; then echo "No task id"; exit 1; fi
           for i in {1..10}; do
             STATUS_JSON=$(curl -b cookies.txt -s http://127.0.0.1:8000/api/tasks/$TASK_ID)
