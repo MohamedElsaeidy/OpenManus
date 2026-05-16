@@ -61,6 +61,21 @@ jobs:
             echo "Waiting for server... attempt $i/30"
             sleep 1
           done
+          if ! curl -sf http://127.0.0.1:8000/api/health >/dev/null 2>&1; then
+            echo "Server did not become ready in time"
+            docker logs openmanus || true
+            exit 1
+          fi
+
+          # Wait for websocket server readiness
+          for i in {1..20}; do
+            if curl -sf http://127.0.0.1:8001/health >/dev/null 2>&1; then
+              echo "WebSocket server is ready"
+              break
+            fi
+            echo "Waiting for websocket server... attempt $i/20"
+            sleep 1
+          done
 
       - name: Check /api/health
         run: curl --fail http://127.0.0.1:8000/api/health
@@ -117,6 +132,7 @@ jobs:
         run: |
           docker logs openmanus || true
           docker exec openmanus cat /tmp/ws.log || true
+          docker exec openmanus cat /tmp/server.log || true
 
       - name: Stop container
         if: always()

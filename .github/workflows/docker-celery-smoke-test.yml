@@ -31,6 +31,20 @@ jobs:
             echo "Waiting for server... attempt $i/30"
             sleep 1
           done
+          if ! curl -sf http://127.0.0.1:8000/api/health >/dev/null 2>&1; then
+            echo "Server did not become ready in time"
+            docker compose logs web worker postgres redis || true
+            exit 1
+          fi
+
+      - name: Verify service health
+        run: |
+          docker compose ps
+          # Ensure key services are up before API checks
+          docker compose ps postgres | grep -E "Up|running"
+          docker compose ps redis | grep -E "Up|running"
+          docker compose ps web | grep -E "Up|running"
+          docker compose ps worker | grep -E "Up|running"
 
       - name: Check /api/health
         run: curl --fail http://127.0.0.1:8000/api/health
@@ -60,7 +74,9 @@ jobs:
 
       - name: Dump logs on failure
         if: failure()
-        run: docker compose logs
+        run: |
+          docker compose ps
+          docker compose logs web worker postgres redis
 
       - name: Tear down
         if: always()
