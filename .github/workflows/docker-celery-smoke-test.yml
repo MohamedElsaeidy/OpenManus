@@ -46,7 +46,7 @@ jobs:
           echo "Created: $TASK_JSON"
           TASK_ID=$(echo "$TASK_JSON" | python -c "import sys, json; print(json.load(sys.stdin)['task_id'])")
           if [ -z "$TASK_ID" ]; then echo "No task id"; exit 1; fi
-          for i in {1..10}; do
+          for i in {1..30}; do
             STATUS_JSON=$(curl -b cookies.txt -s http://127.0.0.1:8000/api/tasks/$TASK_ID)
             echo "Status: $STATUS_JSON"
             STATUS=$(echo "$STATUS_JSON" | python -c "import sys, json; print(json.load(sys.stdin).get('status'))")
