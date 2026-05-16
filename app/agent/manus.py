@@ -20,6 +20,8 @@ from app.tool import (
     ToolCollection,
     WaitForUserInput,
     WebSearch,
+    MemorySave,
+    MemoryRecall,
 )
 from app.tool.ask_human import AskHuman
 from app.tool.browser_use_tool import BrowserUseTool
@@ -59,6 +61,8 @@ class Manus(ToolCallAgent):
             BrowserUseTool(),
             WebSearch(),
             StrReplaceEditor(),
+            MemorySave(),
+            MemoryRecall(),
             AskHuman(),
             WaitForUserInput(),
             Terminate(),

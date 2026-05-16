@@ -92,6 +92,33 @@ class RLSettings(BaseModel):
     )
 
 
+class AgentMemorySettings(BaseModel):
+    enabled: bool = Field(
+        default=False,
+        description="Enable AgentMemory integration for long-term recall.",
+    )
+    base_url: str = Field(
+        default="http://localhost:3111",
+        description="AgentMemory REST base URL.",
+    )
+    project: str = Field(
+        default="openmanus",
+        description="AgentMemory project namespace.",
+    )
+    top_k: int = Field(
+        default=5,
+        description="How many memories to retrieve for contextual recall.",
+    )
+    timeout_seconds: int = Field(
+        default=8,
+        description="HTTP timeout for AgentMemory requests.",
+    )
+    auto_remember_completion: bool = Field(
+        default=True,
+        description="Save final task outcomes to AgentMemory.",
+    )
+
+
 class BrowserSettings(BaseModel):
     headless: bool = Field(False, description="Whether to run browser in headless mode")
     disable_security: bool = Field(
@@ -223,6 +250,10 @@ class AppConfig(BaseModel):
     )
     rl: Optional[RLSettings] = Field(
         default_factory=RLSettings, description="RL integration settings"
+    )
+    agentmemory: Optional[AgentMemorySettings] = Field(
+        default_factory=AgentMemorySettings,
+        description="AgentMemory integration settings",
     )
 
     class Config:
@@ -361,6 +392,7 @@ class Config:
             "daytona_config": daytona_settings,
             "agent": AgentSettings(**raw_config.get("agent", {})),
             "rl": RLSettings(**raw_config.get("rl", {})),
+            "agentmemory": AgentMemorySettings(**raw_config.get("agentmemory", {})),
         }
 
         self._config = AppConfig(**config_dict)
@@ -409,6 +441,11 @@ class Config:
     def workspace_root(self) -> Path:
         """Get the workspace root directory"""
         return WORKSPACE_ROOT
+
+    @property
+    def agentmemory(self) -> AgentMemorySettings:
+        """Get the AgentMemory integration configuration."""
+        return self._config.agentmemory
 
     @property
     def root_path(self) -> Path:

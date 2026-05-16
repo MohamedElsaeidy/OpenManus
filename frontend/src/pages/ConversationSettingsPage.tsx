@@ -1,9 +1,17 @@
 import { Button } from '@/components/ui/button';
-import { getConversation, listSkills, updateConversationSettings, type Conversation, type SkillSummary } from '@/services/conversations';
+import {
+  getConversation,
+  getIntegrationsHealth,
+  listSkills,
+  updateConversationSettings,
+  type Conversation,
+  type IntegrationsHealth,
+  type SkillSummary,
+} from '@/services/conversations';
 import { listModels, type ModelOption } from '@/services/models';
 import { listTools } from '@/services/tools';
 import type { ToolOption } from '@/services/admin';
-import { Save } from 'lucide-react';
+import { RefreshCcw, Save } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -18,7 +26,24 @@ export default function ConversationSettingsPage() {
   const [disabledTools, setDisabledTools] = useState<string[]>([]);
   const [disabledSkills, setDisabledSkills] = useState<string[]>([]);
   const [enableVendorSkills, setEnableVendorSkills] = useState(true);
+  const [health, setHealth] = useState<IntegrationsHealth | null>(null);
+  const [isHealthLoading, setIsHealthLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+
+  const refreshHealth = async (showErrors = false) => {
+    if (!conversationId) return;
+    setIsHealthLoading(true);
+    try {
+      const data = await getIntegrationsHealth(conversationId);
+      setHealth(data);
+    } catch (error) {
+      if (showErrors) {
+        toast.error(error instanceof Error ? error.message : 'Could not load integration health');
+      }
+    } finally {
+      setIsHealthLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (!conversationId) return;
@@ -34,6 +59,15 @@ export default function ConversationSettingsPage() {
         setEnableVendorSkills(loadedConversation.settings?.enable_vendor_skills ?? true);
       })
       .catch(error => toast.error(error instanceof Error ? error.message : 'Could not load settings'));
+  }, [conversationId]);
+
+  useEffect(() => {
+    if (!conversationId) return;
+    refreshHealth();
+    const timer = window.setInterval(() => {
+      if (!document.hidden) refreshHealth();
+    }, 30000);
+    return () => window.clearInterval(timer);
   }, [conversationId]);
 
   if (!conversation || !conversationId) {
@@ -87,6 +121,41 @@ export default function ConversationSettingsPage() {
             Save
           </Button>
         </div>
+
+        <section className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-medium uppercase text-muted-foreground">Integrations</h2>
+            <Button variant="outline" size="sm" onClick={() => refreshHealth(true)} disabled={isHealthLoading}>
+              <RefreshCcw className="size-4" />
+              Refresh
+            </Button>
+          </div>
+          <div className="grid gap-2 md:grid-cols-2">
+            <div className="rounded-md border p-3 text-sm">
+              <div className="mb-1 flex items-center justify-between">
+                <span className="font-medium">AgentMemory</span>
+                <span className={health?.agentmemory?.live ? 'text-emerald-500' : health?.agentmemory?.enabled ? 'text-amber-500' : 'text-muted-foreground'}>
+                  {health?.agentmemory?.live ? 'Live' : health?.agentmemory?.enabled ? 'Down' : 'Disabled'}
+                </span>
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {health?.agentmemory?.reason || 'Not checked yet'}
+              </div>
+            </div>
+            <div className="rounded-md border p-3 text-sm">
+              <div className="mb-1 flex items-center justify-between">
+                <span className="font-medium">Obsidian</span>
+                <span className={health?.obsidian?.live ? 'text-emerald-500' : 'text-amber-500'}>
+                  {health?.obsidian?.live ? 'Live' : 'Waiting'}
+                </span>
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {health?.obsidian?.reason || 'Not checked yet'}
+                {typeof health?.obsidian?.note_count === 'number' ? ` · notes: ${health.obsidian.note_count}` : ''}
+              </div>
+            </div>
+          </div>
+        </section>
 
         <section className="space-y-3">
           <h2 className="text-sm font-medium uppercase text-muted-foreground">Model</h2>

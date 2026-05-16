@@ -4,8 +4,7 @@ import type { Message } from '@/libs/chat-messages/types';
 import { cn } from '@/libs/utils';
 import { getConversationRuntime, pauseConversationSandbox, resumeConversationSandbox, type ConversationRuntime } from '@/services/conversations';
 import { ActivityIcon, FileClockIcon, FolderIcon, GlobeIcon, ListChecksIcon, NetworkIcon, PauseIcon, PlayIcon, SquareTerminalIcon } from 'lucide-react';
-import { useEffect, useState } from 'react';
-import { PreviewContent } from './preview-content';
+import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { PreviewDescription } from './preview-description';
 import { usePreviewData } from './store';
 
@@ -14,31 +13,62 @@ interface ChatPreviewProps {
   taskId: string;
   conversationId?: string;
   className?: string;
+  performanceMode?: boolean;
 }
 
-export const ChatPreview = ({ messages, taskId, conversationId, className }: ChatPreviewProps) => {
+const PreviewContent = lazy(() =>
+  import('./preview-content').then(mod => ({ default: mod.PreviewContent })),
+);
+
+export const ChatPreview = ({ messages, taskId, conversationId, className, performanceMode = false }: ChatPreviewProps) => {
   const { setData } = usePreviewData();
   const [runtime, setRuntime] = useState<ConversationRuntime | null>(null);
+  const runtimeDigestRef = useRef('');
   const workspacePath = `conversations/${conversationId || taskId}`;
 
   useEffect(() => {
     if (!conversationId) return;
     let cancelled = false;
+    const runtimeDigest = (value: ConversationRuntime | null) =>
+      value
+        ? JSON.stringify({
+            status: value.status,
+            running_count: value.running_count,
+            sandbox_status: value.sandbox?.status,
+            process_count: value.processes?.length || 0,
+            container_count: value.containers?.length || 0,
+            url_count: value.urls?.length || 0,
+          })
+        : '';
+    runtimeDigestRef.current = '';
     const loadRuntime = async () => {
       try {
         const nextRuntime = await getConversationRuntime(conversationId);
-        if (!cancelled) setRuntime(nextRuntime);
+        if (!cancelled) {
+          const nextDigest = runtimeDigest(nextRuntime);
+          if (nextDigest !== runtimeDigestRef.current) {
+            runtimeDigestRef.current = nextDigest;
+            setRuntime(nextRuntime);
+          }
+        }
       } catch {
         if (!cancelled) setRuntime(null);
       }
     };
     loadRuntime();
-    const interval = window.setInterval(loadRuntime, 5000);
+    if (performanceMode) {
+      return () => {
+        cancelled = true;
+      };
+    }
+    const interval = window.setInterval(() => {
+      if (!document.hidden) loadRuntime();
+    }, 12000);
     return () => {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [conversationId]);
+  }, [conversationId, performanceMode]);
 
   return (
     <Card className={cn('flex h-full w-full flex-col gap-0 px-2', className)}>
@@ -109,7 +139,9 @@ export const ChatPreview = ({ messages, taskId, conversationId, className }: Cha
         <PreviewDescription messages={messages} />
       </CardHeader>
       <CardContent className="flex-1 overflow-hidden p-2">
-        <PreviewContent messages={messages} />
+        <Suspense fallback={<div className="text-xs text-muted-foreground p-3">Loading preview...</div>}>
+          <PreviewContent messages={messages} performanceMode={performanceMode} />
+        </Suspense>
       </CardContent>
     </Card>
   );

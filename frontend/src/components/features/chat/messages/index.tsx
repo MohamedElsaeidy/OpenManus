@@ -4,6 +4,7 @@ import type { AggregatedMessage, Message } from '@/libs/chat-messages/types';
 import { cn, formatNumber } from '@/libs/utils';
 import '@/styles/animations.css';
 import { ChevronDown, CircleCheck, CircleStop, LoaderIcon } from 'lucide-react';
+import { useMemo, useState } from 'react';
 import { StepBadge } from './step';
 import { ToolMessageContent } from './tools';
 
@@ -248,9 +249,27 @@ const ChatMessage = ({ message }: { message: AggregatedMessage }) => {
 };
 
 export const ChatMessages = ({ messages = [] }: ChatMessageProps) => {
+  const [showAll, setShowAll] = useState(false);
+  const cappedMessages = useMemo(() => {
+    const HARD_CAP = 160;
+    if (showAll || messages.length <= HARD_CAP) return messages;
+    return messages.slice(messages.length - HARD_CAP);
+  }, [messages, showAll]);
+  const hiddenCount = Math.max(0, messages.length - cappedMessages.length);
+
   return (
     <div className="space-y-4">
-      {messages.map((message, index) => (
+      {hiddenCount > 0 && (
+        <div className="container mx-auto max-w-4xl">
+          <button
+            className="rounded-md border px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted"
+            onClick={() => setShowAll(true)}
+          >
+            Show {hiddenCount} older messages
+          </button>
+        </div>
+      )}
+      {cappedMessages.map((message, index) => (
         <div key={message.index || index} className="first:pt-0">
           <ChatMessage message={message} />
         </div>
