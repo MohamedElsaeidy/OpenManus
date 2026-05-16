@@ -58,9 +58,7 @@ class MemorySave(BaseTool):
 
 class MemoryRecall(BaseTool):
     name: str = "memory_recall"
-    description: str = (
-        "Recall relevant long-term memory snippets from AgentMemory for this conversation."
-    )
+    description: str = "Recall relevant long-term memory snippets from AgentMemory for this conversation."
     parameters: dict = {
         "type": "object",
         "properties": {

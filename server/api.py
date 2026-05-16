@@ -392,7 +392,9 @@ def _agentmemory_health(conversation_id: Optional[str] = None) -> dict:
     if payload["live"] and conversation_id:
         # Optional lightweight probe for conversation-specific recall viability.
         try:
-            hits = agentmemory.search(conversation_id=conversation_id, query="summary", limit=1)
+            hits = agentmemory.search(
+                conversation_id=conversation_id, query="summary", limit=1
+            )
             payload["conversation_hits"] = len(hits)
         except Exception:
             payload["conversation_hits"] = 0

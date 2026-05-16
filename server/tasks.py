@@ -11,10 +11,10 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.agent.manus import Manus
 from app.config import config
+from app.memory.agentmemory import agentmemory
 from app.runtime_settings import get_disabled_tools, get_llm_connection
 from app.sandbox.conversation import ConversationSandbox
 from app.skills import format_skill_context, select_skills
-from app.memory.agentmemory import agentmemory
 from app.task_context import (
     current_auto_context_compress,
     current_llm_connection,
@@ -468,7 +468,9 @@ def run_task(task_id: str, prompt: Optional[str] = None):
                 task_id, conversation_id, workspace_root
             )
             obsidian_context = build_obsidian_context(conversation_id)
-            agentmemory_context = build_agentmemory_context(conversation_id, prompt or "")
+            agentmemory_context = build_agentmemory_context(
+                conversation_id, prompt or ""
+            )
             skill_context = format_skill_context(
                 select_skills(
                     prompt or "",
