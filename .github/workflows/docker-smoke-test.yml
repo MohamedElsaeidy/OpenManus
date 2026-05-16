@@ -25,6 +25,16 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
+      redis:
+        image: redis:latest
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -36,6 +46,8 @@ jobs:
         run: |
           docker run -d --network host --name openmanus \
             -e DATABASE_URL=postgresql+psycopg2://postgres:postgres@localhost:5432/openmanus \
+            -e CELERY_BROKER_URL=redis://localhost:6379/0 \
+            -e CELERY_RESULT_BACKEND=redis://localhost:6379/0 \
             openmanus:latest
           # start websocket server inside container on port 8001
           docker exec openmanus sh -c "uvicorn server.ws:app --host 0.0.0.0 --port 8001 --workers 1 >/tmp/ws.log 2>&1 & echo \$! >/tmp/ws.pid"
@@ -65,10 +77,10 @@ jobs:
       - name: Simulate task lifecycle with interrupt and event stream
         run: |
           set -e
-          curl -s -c cookies.txt -X POST http://127.0.0.1:8000/api/auth/signup -H "Content-Type: application/json" -d "{\"email\":\"user$RANDOM@test.com\", \"password\":\"password\", \"name\":\"test\"}"
+          curl -s -o /dev/null -c cookies.txt -X POST http://127.0.0.1:8000/api/auth/signup -H "Content-Type: application/json" -d "{\"email\":\"user$RANDOM@test.com\", \"password\":\"password\", \"name\":\"test\"}"
           TASK_JSON=$(curl -b cookies.txt -s -X POST http://127.0.0.1:8000/api/tasks)
           echo "Task created: $TASK_JSON"
-          TASK_ID=$(echo "$TASK_JSON" | jq -r '.id')
+          TASK_ID=$(echo "$TASK_JSON" | jq -r '.task_id')
           if [ -z "$TASK_ID" ] || [ "$TASK_ID" = "null" ]; then
             echo "Failed to parse task id"; exit 1; fi
           export TASK_ID
