@@ -117,6 +117,26 @@ export interface ObsidianGraph {
   }>;
 }
 
+export interface IntegrationsHealth {
+  conversation_id: string;
+  agentmemory: {
+    enabled: boolean;
+    available: boolean;
+    live: boolean;
+    reason?: string;
+    base_url?: string;
+    project?: string;
+    conversation_hits?: number;
+  };
+  obsidian: {
+    enabled: boolean;
+    available: boolean;
+    live: boolean;
+    reason?: string;
+    note_count?: number;
+  };
+}
+
 export async function listConversations(): Promise<{ conversations: Conversation[] }> {
   const response = await fetch('/api/conversations', {
     credentials: 'same-origin',
@@ -208,6 +228,14 @@ export async function getObsidianGraph(conversationId: string): Promise<Obsidian
     credentials: 'same-origin',
   });
   if (!response.ok) throw new Error('Could not load vault graph');
+  return response.json();
+}
+
+export async function getIntegrationsHealth(conversationId: string): Promise<IntegrationsHealth> {
+  const response = await fetch(`/api/conversations/${conversationId}/integrations/health`, {
+    credentials: 'same-origin',
+  });
+  if (!response.ok) throw new Error('Could not load integrations health');
   return response.json();
 }
 

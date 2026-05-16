@@ -14,6 +14,7 @@ from app.config import config
 from app.runtime_settings import get_disabled_tools, get_llm_connection
 from app.sandbox.conversation import ConversationSandbox
 from app.skills import format_skill_context, select_skills
+from app.memory.agentmemory import agentmemory
 from app.task_context import (
     current_auto_context_compress,
     current_llm_connection,
@@ -291,6 +292,13 @@ def build_obsidian_context(conversation_id: str, max_notes: int = 6) -> str:
     return "\n".join(lines)
 
 
+def build_agentmemory_context(conversation_id: str, prompt: str) -> str:
+    """Build optional long-term recall context from AgentMemory."""
+    if not prompt or not agentmemory.enabled:
+        return ""
+    return agentmemory.format_context(conversation_id=conversation_id, query=prompt)
+
+
 def auto_sync_obsidian_notes(conversation_id: str, workspace_root: Path) -> None:
     """Automatically sync markdown notes from workspace into obsidian_notes + graph edges."""
     if not workspace_root.exists():
@@ -460,6 +468,7 @@ def run_task(task_id: str, prompt: Optional[str] = None):
                 task_id, conversation_id, workspace_root
             )
             obsidian_context = build_obsidian_context(conversation_id)
+            agentmemory_context = build_agentmemory_context(conversation_id, prompt or "")
             skill_context = format_skill_context(
                 select_skills(
                     prompt or "",
@@ -476,7 +485,14 @@ def run_task(task_id: str, prompt: Optional[str] = None):
                     str(workspace_root), config.sandbox.work_dir
                 )
             context_parts = [
-                part for part in (continuity, obsidian_context, skill_context) if part
+                part
+                for part in (
+                    continuity,
+                    obsidian_context,
+                    agentmemory_context,
+                    skill_context,
+                )
+                if part
             ]
             combined_context = "\n\n".join(context_parts)
             run_prompt = (
@@ -512,6 +528,13 @@ def run_task(task_id: str, prompt: Optional[str] = None):
         workspace_summary = summarize_workspace(workspace_root)
         result_text = str(result or "").strip()
         completion_message = result_text if result_text else "Task completed."
+        if config.agentmemory.enabled and config.agentmemory.auto_remember_completion:
+            agentmemory.remember(
+                conversation_id=conversation_id,
+                title="Task completion summary",
+                content=completion_message,
+                metadata={"task_id": task_id, "status": "COMPLETED"},
+            )
         registry.update_task(
             task,
             result={

@@ -21,6 +21,7 @@ from sqlalchemy import func, text
 from sse_starlette.sse import EventSourceResponse
 
 from app.config import config
+from app.memory.agentmemory import agentmemory
 from app.sandbox.conversation import ConversationSandbox
 from app.skills import load_skills, select_skills
 from core.task import TaskStatus
@@ -95,6 +96,8 @@ AVAILABLE_TOOLS = [
     {"name": "browser_use", "label": "Browser", "scope": "browser"},
     {"name": "web_search", "label": "Web Search", "scope": "browser"},
     {"name": "str_replace_editor", "label": "File Editor", "scope": "code"},
+    {"name": "memory_save", "label": "Memory Save", "scope": "memory"},
+    {"name": "memory_recall", "label": "Memory Recall", "scope": "memory"},
     {"name": "ask_human", "label": "Ask Human", "scope": "conversation"},
     {"name": "wait_for_user_input", "label": "Wait For Input", "scope": "conversation"},
     {"name": "terminate", "label": "Terminate", "scope": "control", "locked": True},
@@ -331,6 +334,69 @@ def _conversation_sandbox(conversation_id: str) -> ConversationSandbox:
         host_workspace=Path(HOST_WORKSPACE_ROOT) / "conversations" / conversation_id,
         config=config.sandbox,
     )
+
+
+def _obsidian_health(session, conversation_id: Optional[str] = None) -> dict:
+    payload = {
+        "enabled": True,
+        "available": True,
+        "live": False,
+        "reason": "No notes found yet",
+        "note_count": 0,
+    }
+    try:
+        query = session.query(func.count(ObsidianNoteORM.note_id))
+        if conversation_id:
+            query = query.filter(
+                ObsidianNoteORM.conversation_id == uuid.UUID(str(conversation_id))
+            )
+        count = int(query.scalar() or 0)
+        payload["note_count"] = count
+        if count > 0:
+            payload["live"] = True
+            payload["reason"] = "Notes indexed"
+    except Exception as exc:
+        payload["available"] = False
+        payload["live"] = False
+        payload["reason"] = f"DB error: {exc}"
+    return payload
+
+
+def _agentmemory_health(conversation_id: Optional[str] = None) -> dict:
+    payload = {
+        "enabled": bool(config.agentmemory.enabled),
+        "available": False,
+        "live": False,
+        "reason": "Disabled",
+        "base_url": config.agentmemory.base_url,
+        "project": config.agentmemory.project,
+    }
+    if not config.agentmemory.enabled:
+        return payload
+
+    try:
+        import httpx
+
+        with httpx.Client(timeout=max(1, config.agentmemory.timeout_seconds)) as client:
+            response = client.get(f"{config.agentmemory.base_url.rstrip('/')}/livez")
+            payload["available"] = response.status_code < 500
+            payload["live"] = response.is_success
+            payload["reason"] = (
+                "Live" if response.is_success else f"HTTP {response.status_code}"
+            )
+    except Exception as exc:
+        payload["available"] = False
+        payload["live"] = False
+        payload["reason"] = str(exc)
+
+    if payload["live"] and conversation_id:
+        # Optional lightweight probe for conversation-specific recall viability.
+        try:
+            hits = agentmemory.search(conversation_id=conversation_id, query="summary", limit=1)
+            payload["conversation_hits"] = len(hits)
+        except Exception:
+            payload["conversation_hits"] = 0
+    return payload
 
 
 def _prune_orphan_conversation_sandboxes(session) -> int:
@@ -1485,6 +1551,18 @@ async def get_conversation_state(request: Request, conversation_id: str):
         "latest_status": conversation_payload.get("latest_status"),
         "sandbox": sandbox_status,
     }
+
+
+@app.get("/api/conversations/{conversation_id}/integrations/health")
+async def get_conversation_integrations_health(request: Request, conversation_id: str):
+    user = _require_user(request)
+    with registry.SessionLocal() as session:
+        _require_conversation(session, user.user_id, conversation_id)
+        return {
+            "conversation_id": conversation_id,
+            "agentmemory": _agentmemory_health(conversation_id),
+            "obsidian": _obsidian_health(session, conversation_id),
+        }
 
 
 @app.post("/api/conversations/{conversation_id}/sandbox/start")

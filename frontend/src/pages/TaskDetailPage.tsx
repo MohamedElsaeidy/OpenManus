@@ -6,9 +6,15 @@ import { useAutoScroll } from '@/hooks/use-auto-scroll';
 import { useConversations } from '@/hooks/use-conversations';
 import { aggregateMessages } from '@/libs/chat-messages';
 import type { Message } from '@/libs/chat-messages/types';
-import { getConversationHistory, sendConversationMessage } from '@/services/conversations';
+import {
+  getConversationHistory,
+  getIntegrationsHealth,
+  sendConversationMessage,
+  type IntegrationsHealth,
+} from '@/services/conversations';
 import { createTask, getTask, getTaskEvents, sendTaskMessage, terminateTask } from '@/services/tasks';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { GaugeIcon, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 
@@ -27,6 +33,11 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
   const [isTerminating, setIsTerminating] = useState(false);
   const [isTaskCompleted, setIsTaskCompleted] = useState(false);
   const [conversationId, setConversationId] = useState<string | undefined>();
+  const [integrationsHealth, setIntegrationsHealth] = useState<IntegrationsHealth | null>(null);
+  const [isPreviewCollapsed, setIsPreviewCollapsed] = useState(false);
+  const [performanceMode, setPerformanceMode] = useState(
+    () => localStorage.getItem('openmanus.performanceMode') === '1',
+  );
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const isTaskCompletedRef = useRef(false);
@@ -34,6 +45,7 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
   const seenEventKeysRef = useRef<Set<string>>(new Set());
 
   const { containerRef: messagesContainerRef, shouldAutoScroll, handleScroll, scrollToBottom } = useAutoScroll();
+  const aggregatedMessages = useMemo(() => aggregateMessages(messages), [messages]);
 
   useEffect(() => {
     shouldAutoScrollRef.current = shouldAutoScroll;
@@ -145,7 +157,7 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
           } else if (data.name === 'agent:lifecycle:terminating') {
             setIsTerminating(true);
           } else {
-            setIsThinking(true);
+            setIsThinking(prev => prev || true);
           }
         }
       } catch (error) {
@@ -284,6 +296,30 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
     };
   }, []);
 
+  useEffect(() => {
+    if (!conversationId) {
+      setIntegrationsHealth(null);
+      return;
+    }
+    let stopped = false;
+    const loadHealth = async () => {
+      try {
+        const data = await getIntegrationsHealth(conversationId);
+        if (!stopped) setIntegrationsHealth(data);
+      } catch {
+        if (!stopped) setIntegrationsHealth(null);
+      }
+    };
+    loadHealth();
+    const timer = window.setInterval(() => {
+      if (!document.hidden) loadHealth();
+    }, performanceMode ? 60000 : 30000);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [conversationId, performanceMode]);
+
   const handleSubmit = async (value: { prompt: string }) => {
     const prompt = value.prompt.trim();
     if (!prompt) return;
@@ -369,6 +405,49 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
         <div className="flex h-12 items-center gap-2 border-b px-5">
           <div className="font-semibold">OpenManus v2.0</div>
           {isThinking && <div className="text-xs text-muted-foreground">Working</div>}
+          <div className="ml-auto flex items-center gap-2">
+            <div
+              className="rounded border px-2 py-0.5 text-[11px]"
+              title={integrationsHealth?.agentmemory?.reason || 'AgentMemory status unknown'}
+            >
+              AgentMemory:{' '}
+              <span className={integrationsHealth?.agentmemory?.live ? 'text-emerald-500' : integrationsHealth?.agentmemory?.enabled ? 'text-amber-500' : 'text-muted-foreground'}>
+                {integrationsHealth?.agentmemory?.live ? 'Live' : integrationsHealth?.agentmemory?.enabled ? 'Down' : 'Disabled'}
+              </span>
+            </div>
+            <div
+              className="rounded border px-2 py-0.5 text-[11px]"
+              title={integrationsHealth?.obsidian?.reason || 'Obsidian status unknown'}
+            >
+              Obsidian:{' '}
+              <span className={integrationsHealth?.obsidian?.live ? 'text-emerald-500' : 'text-amber-500'}>
+                {integrationsHealth?.obsidian?.live ? 'Live' : 'Waiting'}
+              </span>
+            </div>
+            <button
+              className="inline-flex h-7 w-7 items-center justify-center rounded border hover:bg-muted"
+              onClick={() => setIsPreviewCollapsed(current => !current)}
+              title={isPreviewCollapsed ? 'Show Manus computer panel' : 'Hide Manus computer panel'}
+              aria-label={isPreviewCollapsed ? 'Show Manus computer panel' : 'Hide Manus computer panel'}
+            >
+              {isPreviewCollapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
+            </button>
+            <button
+              className={`inline-flex h-7 items-center gap-1 rounded border px-2 text-[11px] hover:bg-muted ${performanceMode ? 'border-emerald-500/40 text-emerald-600' : ''}`}
+              onClick={() => {
+                setPerformanceMode(prev => {
+                  const next = !prev;
+                  localStorage.setItem('openmanus.performanceMode', next ? '1' : '0');
+                  return next;
+                });
+              }}
+              title={performanceMode ? 'Performance mode enabled' : 'Enable performance mode'}
+              aria-label="Toggle performance mode"
+            >
+              <GaugeIcon className="size-3.5" />
+              {performanceMode ? 'Perf On' : 'Perf Off'}
+            </button>
+          </div>
         </div>
         <div className="relative flex h-full flex-col">
           <div
@@ -380,7 +459,7 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
             }}
             onScroll={handleScroll}
           >
-            <ChatMessages messages={aggregateMessages(messages)} />
+            <ChatMessages messages={aggregatedMessages} />
           </div>
           <ChatInput
             status={isTerminating ? 'terminating' : isThinking ? 'thinking' : isTaskCompleted ? 'completed' : 'idle'}
@@ -390,9 +469,16 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
           />
         </div>
       </div>
-      <div className="hidden w-[44vw] min-w-[420px] max-w-[760px] items-center justify-center bg-muted/30 p-2 lg:flex">
-        <ChatPreview taskId={activeTaskId || conversationId || 'workspace'} conversationId={conversationId} messages={messages} />
-      </div>
+      {!isPreviewCollapsed && (
+        <div className="hidden w-[44vw] min-w-[420px] max-w-[760px] items-center justify-center bg-muted/30 p-2 lg:flex">
+          <ChatPreview
+            taskId={activeTaskId || conversationId || 'workspace'}
+            conversationId={conversationId}
+            messages={messages}
+            performanceMode={performanceMode}
+          />
+        </div>
+      )}
     </div>
   );
 }

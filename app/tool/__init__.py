@@ -4,6 +4,7 @@ from app.tool.browser_use_tool import BrowserUseTool
 from app.tool.codebase import CodebaseOverview, GlobSearch, GrepSearch, ReadFiles
 from app.tool.crawl4ai import Crawl4aiTool
 from app.tool.create_chat_completion import CreateChatCompletion
+from app.tool.long_term_memory import MemoryRecall, MemorySave
 from app.tool.planning import PlanningTool
 from app.tool.skill_playbook import SkillPlaybook
 from app.tool.str_replace_editor import StrReplaceEditor
@@ -30,4 +31,6 @@ __all__ = [
     "SkillPlaybook",
     "Crawl4aiTool",
     "WaitForUserInput",
+    "MemorySave",
+    "MemoryRecall",
 ]

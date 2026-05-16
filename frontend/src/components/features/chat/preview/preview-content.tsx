@@ -25,7 +25,13 @@ import SyntaxHighlighter from 'react-syntax-highlighter';
 import { githubGist } from 'react-syntax-highlighter/dist/esm/styles/hljs';
 import { usePreviewData } from './store';
 
-export const PreviewContent = ({ messages }: { messages: Message[] }) => {
+export const PreviewContent = ({
+  messages,
+  performanceMode = false,
+}: {
+  messages: Message[];
+  performanceMode?: boolean;
+}) => {
   const { data } = usePreviewData();
 
   if (data?.type === 'tool') {
@@ -130,7 +136,13 @@ export const PreviewContent = ({ messages }: { messages: Message[] }) => {
   }
 
   if (data?.type === 'runtime') {
-    return <RuntimePreview conversationId={data.conversationId} initialTab={data.tab} />;
+    return (
+      <RuntimePreview
+        conversationId={data.conversationId}
+        initialTab={data.tab}
+        performanceMode={performanceMode}
+      />
+    );
   }
 
   if (data?.type === 'terminal') {
@@ -152,7 +164,15 @@ export const PreviewContent = ({ messages }: { messages: Message[] }) => {
   return <NotPreview />;
 };
 
-const RuntimePreview = ({ conversationId, initialTab = 'processes' }: { conversationId: string; initialTab?: 'processes' | 'ports' | 'containers' }) => {
+const RuntimePreview = ({
+  conversationId,
+  initialTab = 'processes',
+  performanceMode = false,
+}: {
+  conversationId: string;
+  initialTab?: 'processes' | 'ports' | 'containers';
+  performanceMode?: boolean;
+}) => {
   const [refreshTick, setRefreshTick] = useState(0);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [tab, setTab] = useState<'processes' | 'ports' | 'containers'>(initialTab);
@@ -163,9 +183,12 @@ const RuntimePreview = ({ conversationId, initialTab = 'processes' }: { conversa
   );
 
   useEffect(() => {
-    const interval = window.setInterval(() => setRefreshTick(tick => tick + 1), 3000);
+    const interval = window.setInterval(
+      () => setRefreshTick(tick => tick + 1),
+      performanceMode ? 12000 : 3000,
+    );
     return () => window.clearInterval(interval);
-  }, []);
+  }, [performanceMode]);
 
   const killProcess = async (pid: number) => {
     setBusyKey(`process:${pid}`);
