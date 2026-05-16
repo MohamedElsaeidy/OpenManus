@@ -65,7 +65,8 @@ jobs:
       - name: Simulate task lifecycle with interrupt and event stream
         run: |
           set -e
-          TASK_JSON=$(curl -s -X POST http://127.0.0.1:8000/api/tasks)
+          curl -s -c cookies.txt -X POST http://127.0.0.1:8000/api/auth/signup -H "Content-Type: application/json" -d "{\"email\":\"user$RANDOM@test.com\", \"password\":\"password\", \"name\":\"test\"}"
+          TASK_JSON=$(curl -b cookies.txt -s -X POST http://127.0.0.1:8000/api/tasks)
           echo "Task created: $TASK_JSON"
           TASK_ID=$(echo "$TASK_JSON" | jq -r '.id')
           if [ -z "$TASK_ID" ] || [ "$TASK_ID" = "null" ]; then
