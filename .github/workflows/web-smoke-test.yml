@@ -36,23 +36,30 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Install PostgreSQL client (for local act compatibility)
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
-
       - name: Wait for PostgreSQL
-        env:
-          PGPASSWORD: postgres
         run: |
-          for i in {1..30}; do
-            if pg_isready -h localhost -U postgres -d openmanus; then
-              echo "PostgreSQL is ready"
-              exit 0
-            fi
-            echo "Waiting for PostgreSQL to be ready..."
-            sleep 1
-          done
-          echo "PostgreSQL not ready in time"
-          exit 1
+          python - <<'PY'
+          import time
+          import psycopg2
+
+          for i in range(30):
+              try:
+                  conn = psycopg2.connect(
+                      host="localhost",
+                      port=5432,
+                      user="postgres",
+                      password="postgres",
+                      dbname="openmanus",
+                  )
+                  conn.close()
+                  print("PostgreSQL is ready")
+                  raise SystemExit(0)
+              except Exception as exc:
+                  print(f"Waiting for PostgreSQL... {i+1}/30 ({exc})")
+                  time.sleep(1)
+          print("PostgreSQL not ready in time")
+          raise SystemExit(1)
+          PY
 
       - name: Start FastAPI server
         env:
@@ -93,3 +100,8 @@ jobs:
         if: always()
         run: |
           if [ -f server.pid ]; then kill $(cat server.pid) || true; fi
+
+      - name: Dump server logs on failure
+        if: failure()
+        run: |
+          cat /tmp/server.log || true
