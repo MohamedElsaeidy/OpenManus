@@ -135,6 +135,10 @@ export const PreviewContent = ({
     return <WorkspacePreview />;
   }
 
+  if (data?.type === 'live') {
+    return <LiveActivityPreview messages={messages} />;
+  }
+
   if (data?.type === 'runtime') {
     return (
       <RuntimePreview
@@ -161,7 +165,80 @@ export const PreviewContent = ({
     return <VaultPreview conversationId={data.conversationId} />;
   }
 
-  return <NotPreview />;
+  return <LiveActivityPreview messages={messages} />;
+};
+
+const LiveActivityPreview = ({ messages }: { messages: Message[] }) => {
+  const recent = [...messages]
+    .filter(
+      message =>
+        Boolean(message.type) &&
+        message.type !== 'agent:lifecycle:step:act:tool:terminal:output',
+    )
+    .slice(-24)
+    .reverse();
+
+  const terminalTail = messages
+    .filter(message => message.type === 'agent:lifecycle:step:act:tool:terminal:output')
+    .map(message => String(message.content.chunk || ''))
+    .join('')
+    .slice(-5000);
+
+  const status = recent.find(message => message.type === 'agent:lifecycle:complete')
+    ? 'Completed'
+    : recent.find(message => message.type === 'agent:lifecycle:terminated')
+      ? 'Terminated'
+      : recent.find(message => message.type === 'agent:lifecycle:step:error')
+        ? 'Error'
+        : 'Running';
+
+  return (
+    <div className="h-full min-h-0 p-4">
+      <Card className="flex h-full min-h-0 flex-col overflow-hidden">
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base">Live Activity</CardTitle>
+            <Badge variant={status === 'Running' ? 'default' : status === 'Completed' ? 'outline' : 'destructive'}>
+              {status}
+            </Badge>
+          </div>
+          <CardDescription>What Manus is doing right now.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid min-h-0 flex-1 grid-rows-[1fr_auto] gap-3 overflow-hidden">
+          <div className="min-h-0 overflow-auto rounded-md border">
+            {recent.length ? (
+              recent.map((message, index) => (
+                <div key={message.index || index} className="border-b p-2 last:border-b-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="truncate text-xs font-medium">{String(message.type || 'event')}</div>
+                    <div className="text-muted-foreground text-[11px]">
+                      {message.createdAt ? new Date(message.createdAt).toLocaleTimeString() : ''}
+                    </div>
+                  </div>
+                  {message.content?.name ? (
+                    <div className="text-muted-foreground mt-0.5 truncate font-mono text-[11px]">
+                      {String(message.content.name)}
+                    </div>
+                  ) : null}
+                  {message.content?.message ? (
+                    <div className="mt-1 text-xs">{String(message.content.message)}</div>
+                  ) : null}
+                </div>
+              ))
+            ) : (
+              <div className="text-muted-foreground p-3 text-sm">No live events yet.</div>
+            )}
+          </div>
+          <div className="overflow-hidden rounded-md border bg-neutral-950 text-neutral-100">
+            <div className="border-b border-neutral-800 px-3 py-1.5 text-xs font-medium">Terminal tail</div>
+            <pre className="max-h-36 overflow-auto whitespace-pre-wrap break-words p-3 font-mono text-[11px] leading-5">
+              {terminalTail || 'No terminal output yet.'}
+            </pre>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
 };
 
 const RuntimePreview = ({
@@ -390,6 +467,24 @@ const ChangesPreview = ({ messages }: { messages: Message[] }) => {
               <div key={message.index || index} className="rounded-md border p-2">
                 <div className="font-mono text-sm">{String(message.content.path || '')}</div>
                 <div className="text-muted-foreground text-xs">{String(message.content.tool || 'tool')}</div>
+                {Array.isArray(message.content?.diff_preview?.lines) && message.content.diff_preview.lines.length > 0 ? (
+                  <pre className="mt-2 overflow-auto rounded-md border bg-zinc-950 p-2 font-mono text-xs leading-5 text-zinc-100">
+                    {message.content.diff_preview.lines.map((line: string, lineIndex: number) => {
+                      const cls = line.startsWith('+')
+                        ? 'bg-emerald-900/30 text-emerald-200'
+                        : line.startsWith('-')
+                          ? 'bg-red-900/30 text-red-200'
+                          : line.startsWith('@@')
+                            ? 'bg-zinc-800 text-zinc-300'
+                            : 'text-zinc-100';
+                      return (
+                        <div key={`${message.index || index}-${lineIndex}`} className={cls}>
+                          {line || ' '}
+                        </div>
+                      );
+                    })}
+                  </pre>
+                ) : null}
               </div>
             ))}
             {completions.map((message, index) => {
@@ -918,17 +1013,6 @@ const formatFileSize = (size: number): string => {
   if (kbSize < 1024) return `${Math.round(kbSize)} KB`;
   const mbSize = kbSize / 1024;
   return `${mbSize.toFixed(1)} MB`;
-};
-
-const NotPreview = () => {
-  return (
-    <div className="flex h-full items-center justify-center rounded-md border border-dashed p-8">
-      <div className="max-w-sm text-center">
-        <div className="text-sm font-medium">No active computer view</div>
-        <div className="text-muted-foreground mt-1 text-xs">Browser screenshots, tool details, and task workspace files will appear here.</div>
-      </div>
-    </div>
-  );
 };
 
 const getFileLanguage = (path: string): string => {

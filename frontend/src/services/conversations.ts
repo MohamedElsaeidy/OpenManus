@@ -9,9 +9,21 @@ export interface Conversation {
     auto_context_compress?: boolean;
     disabled_skills?: string[];
     enable_vendor_skills?: boolean;
+    pinned_skills?: string[];
+    identity_notes?: string;
+    auto_skill_curator?: boolean;
+    skill_suggestions?: Array<{
+      key: string;
+      tools: string[];
+      count: number;
+      last_seen?: number;
+      last_prompt?: string;
+    }>;
   };
   context?: {
     requested_window?: number | null;
+    received_window?: number | null;
+    received_window_source?: string | null;
     current_input_tokens?: number;
     usage_ratio?: number | null;
     is_near_limit?: boolean;
@@ -44,6 +56,11 @@ export interface ConversationHistory {
     created_at?: string | null;
   }>;
   events: ConversationEvent[];
+  pagination?: {
+    limit?: number;
+    next_before_event_id?: number | null;
+    has_more?: boolean;
+  };
 }
 
 export interface ConversationRuntime {
@@ -135,6 +152,14 @@ export interface IntegrationsHealth {
     reason?: string;
     note_count?: number;
   };
+  llm_connection?: {
+    configured: boolean;
+    live: boolean;
+    reason?: string;
+    api_type?: string;
+    base_url?: string;
+    model_count?: number;
+  };
 }
 
 export async function listConversations(): Promise<{ conversations: Conversation[] }> {
@@ -164,12 +189,44 @@ export async function getConversation(conversationId: string): Promise<Conversat
   return response.json();
 }
 
-export async function getConversationHistory(conversationId: string): Promise<ConversationHistory> {
-  const response = await fetch(`/api/conversations/${conversationId}/events/history`, {
+export async function getConversationHistory(conversationId: string, limit = 160): Promise<ConversationHistory> {
+  const response = await fetch(`/api/conversations/${conversationId}/events/history?limit=${encodeURIComponent(String(limit))}`, {
     credentials: 'same-origin',
   });
   if (!response.ok) throw new Error('Could not load conversation history');
   return response.json();
+}
+
+export async function getConversationHistoryAll(conversationId: string): Promise<ConversationHistory> {
+  const pageSize = 1000;
+  let beforeEventId: number | null | undefined = undefined;
+  let conversation: Conversation | undefined;
+  let tasks: ConversationHistory['tasks'] = [];
+  const events: ConversationEvent[] = [];
+
+  for (let page = 0; page < 10; page += 1) {
+    const suffix = beforeEventId ? `&before_event_id=${beforeEventId}` : '';
+    const response = await fetch(
+      `/api/conversations/${conversationId}/events/history?limit=${pageSize}${suffix}`,
+      { credentials: 'same-origin' },
+    );
+    if (!response.ok) throw new Error('Could not load conversation history');
+    const data: ConversationHistory = await response.json();
+    conversation = data.conversation;
+    tasks = data.tasks || tasks;
+    events.push(...(data.events || []));
+    const pagination = data.pagination || {};
+    if (!pagination.has_more || !pagination.next_before_event_id) {
+      break;
+    }
+    beforeEventId = pagination.next_before_event_id;
+  }
+
+  return {
+    conversation: conversation as Conversation,
+    tasks,
+    events,
+  };
 }
 
 export async function getConversationRuntime(conversationId: string): Promise<ConversationRuntime> {
@@ -274,6 +331,9 @@ export async function updateConversationSettings(
     auto_context_compress?: boolean;
     disabled_skills?: string[];
     enable_vendor_skills?: boolean;
+    pinned_skills?: string[];
+    identity_notes?: string;
+    auto_skill_curator?: boolean;
   },
 ): Promise<Conversation> {
   const response = await fetch(`/api/conversations/${conversationId}/settings`, {

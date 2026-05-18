@@ -13,7 +13,7 @@ from openai import (
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from tenacity import (
     retry,
-    retry_if_exception_type,
+    retry_if_exception,
     stop_after_attempt,
     wait_random_exponential,
 )
@@ -45,6 +45,18 @@ MULTIMODAL_MODELS = [
     "claude-3-sonnet-20240229",
     "claude-3-haiku-20240307",
 ]
+
+
+def _should_retry_llm_exception(exc: Exception) -> bool:
+    """Retry transient provider failures only."""
+    if isinstance(exc, (TokenLimitExceeded, ValueError)):
+        return False
+    text = str(exc).lower()
+    if "no user query found in messages" in text:
+        return False
+    if "jinja template" in text and "prompt template" in text:
+        return False
+    return isinstance(exc, (RateLimitError, APIError, OpenAIError))
 
 
 class TokenCounter:
@@ -247,8 +259,30 @@ class LLM:
                 "max_tokens": connection.get("max_tokens"),
                 "temperature": connection.get("temperature"),
             }.items()
-            if value not in (None, "")
+            if value not in (None, "") and not self._is_masked_value(value)
         }
+
+    @staticmethod
+    def _is_masked_value(value: object) -> bool:
+        return isinstance(value, str) and value.strip() == "********"
+
+    @staticmethod
+    def _safe_int(value: object, fallback: int) -> int:
+        if LLM._is_masked_value(value):
+            return fallback
+        try:
+            return int(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return fallback
+
+    @staticmethod
+    def _safe_float(value: object, fallback: float) -> float:
+        if LLM._is_masked_value(value):
+            return fallback
+        try:
+            return float(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return fallback
 
     def active_client(self):
         overrides = self.active_request_overrides()
@@ -270,11 +304,15 @@ class LLM:
 
     def active_max_tokens(self) -> int:
         overrides = self.active_request_overrides()
-        return int(overrides.get("max_tokens", self.max_tokens))
+        return self._safe_int(
+            overrides.get("max_tokens", self.max_tokens), self.max_tokens
+        )
 
     def active_temperature(self) -> float:
         overrides = self.active_request_overrides()
-        return float(overrides.get("temperature", self.temperature))
+        return self._safe_float(
+            overrides.get("temperature", self.temperature), self.temperature
+        )
 
     def active_base_url(self) -> str:
         overrides = self.active_request_overrides()
@@ -516,9 +554,7 @@ class LLM:
     @retry(
         wait=wait_random_exponential(min=1, max=60),
         stop=stop_after_attempt(6),
-        retry=retry_if_exception_type(
-            (OpenAIError, Exception, ValueError)
-        ),  # Don't retry TokenLimitExceeded
+        retry=retry_if_exception(_should_retry_llm_exception),
     )
     async def ask(
         self,
@@ -648,9 +684,7 @@ class LLM:
     @retry(
         wait=wait_random_exponential(min=1, max=60),
         stop=stop_after_attempt(6),
-        retry=retry_if_exception_type(
-            (OpenAIError, Exception, ValueError)
-        ),  # Don't retry TokenLimitExceeded
+        retry=retry_if_exception(_should_retry_llm_exception),
     )
     async def ask_with_images(
         self,
@@ -809,9 +843,7 @@ class LLM:
     @retry(
         wait=wait_random_exponential(min=1, max=60),
         stop=stop_after_attempt(6),
-        retry=retry_if_exception_type(
-            (OpenAIError, Exception, ValueError)
-        ),  # Don't retry TokenLimitExceeded
+        retry=retry_if_exception(_should_retry_llm_exception),
     )
     async def ask_tool(
         self,
@@ -940,6 +972,11 @@ class LLM:
                 logger.error("Rate limit exceeded. Consider increasing retry attempts.")
             elif isinstance(oe, APIError):
                 logger.error(f"API error: {oe}")
+            if "No user query found in messages" in str(oe):
+                raise ValueError(
+                    "Model prompt template rejected this tool-call transcript "
+                    "(No user query found). Use a tool-capable template/model."
+                ) from oe
             raise
         except Exception as e:
             logger.error(f"Unexpected error in ask_tool: {e}")

@@ -4,6 +4,7 @@ export type PreviewData =
   | { type: 'tool'; toolId: string }
   | { type: 'browser'; url: string; title: string; screenshot: string }
   | { type: 'workspace'; path: string }
+  | { type: 'live' }
   | { type: 'runtime'; conversationId: string; tab?: 'processes' | 'ports' | 'containers' }
   | { type: 'terminal' }
   | { type: 'changes' }

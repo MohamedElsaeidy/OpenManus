@@ -16,6 +16,14 @@ export interface AdminSettings {
     api_type?: string;
     max_tokens?: number;
     temperature?: number;
+    fallback_chain?: Array<{
+      model?: string;
+      base_url?: string;
+      api_key?: string;
+      api_type?: string;
+      max_tokens?: number;
+      temperature?: number;
+    }>;
   };
   llm_connection_override?: AdminSettings['llm_connection'];
   tools: { disabled: string[] };
