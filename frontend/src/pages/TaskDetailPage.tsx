@@ -42,6 +42,8 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
   );
 
   const eventSourceRef = useRef<EventSource | null>(null);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const currentStreamTaskIdRef = useRef<string | null>(null);
   const eventErrorCountRef = useRef(0);
   const isTaskCompletedRef = useRef(false);
   const shouldAutoScrollRef = useRef(false);
@@ -53,6 +55,12 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
     return messages.slice(messages.length - historyWindow);
   }, [historyWindow, messages]);
   const aggregatedMessages = useMemo(() => aggregateMessages(visibleMessages), [visibleMessages]);
+  const lastFinishedAt = useMemo(() => {
+    const last = [...messages]
+      .reverse()
+      .find(m => m.type === 'agent:lifecycle:complete' || m.type === 'agent:lifecycle:terminated');
+    return last?.createdAt || null;
+  }, [messages]);
 
   useEffect(() => {
     shouldAutoScrollRef.current = shouldAutoScroll;
@@ -103,9 +111,14 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
 
   const setupEventSource = useCallback((taskId?: string) => {
     if (!taskId) return;
+    currentStreamTaskIdRef.current = taskId;
 
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
+    }
+    if (reconnectTimerRef.current) {
+      window.clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
     }
 
     const eventSource = getTaskEvents({ taskId });
@@ -153,6 +166,10 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
               eventSourceRef.current.close();
               eventSourceRef.current = null;
             }
+            if (reconnectTimerRef.current) {
+              window.clearTimeout(reconnectTimerRef.current);
+              reconnectTimerRef.current = null;
+            }
           } else if (data.name === 'agent:lifecycle:terminated') {
             setIsThinking(false);
             setIsTerminating(false);
@@ -161,6 +178,10 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
             if (eventSourceRef.current) {
               eventSourceRef.current.close();
               eventSourceRef.current = null;
+            }
+            if (reconnectTimerRef.current) {
+              window.clearTimeout(reconnectTimerRef.current);
+              reconnectTimerRef.current = null;
             }
           } else if (data.name === 'agent:lifecycle:terminating') {
             setIsTerminating(true);
@@ -190,18 +211,31 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
         console.error('Connection failed - trying to reconnect...');
         // Browser auto-reconnect is expected transient behavior for SSE.
         // Avoid noisy toasts unless retries persist.
-        if (eventErrorCountRef.current >= 4) {
+        if (eventErrorCountRef.current >= 8) {
           errorMessage = 'Connection unstable, retrying...';
           toast.error(errorMessage);
         }
         return;
       } else if (eventSource.readyState === EventSource.CLOSED) {
         console.error('Connection closed');
-        errorMessage = 'Connection closed';
+        // Closed streams can happen on proxy/container restarts.
+        // Recreate the EventSource manually if task isn't terminal yet.
+        if (!reconnectTimerRef.current && currentStreamTaskIdRef.current) {
+          const delay = Math.min(12000, 1000 * Math.max(1, eventErrorCountRef.current));
+          reconnectTimerRef.current = window.setTimeout(() => {
+            reconnectTimerRef.current = null;
+            if (isTaskCompletedRef.current) return;
+            setupEventSource(currentStreamTaskIdRef.current || undefined);
+          }, delay);
+        }
+        if (eventErrorCountRef.current >= 3) {
+          errorMessage = 'Connection unstable, retrying...';
+          toast.error(errorMessage);
+        }
+        return;
       }
 
       toast.error(errorMessage);
-      setIsThinking(false);
 
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
@@ -332,6 +366,9 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
       }
+      if (reconnectTimerRef.current) {
+        window.clearTimeout(reconnectTimerRef.current);
+      }
     };
   }, []);
 
@@ -443,7 +480,15 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
       <div className="flex min-w-0 flex-1 flex-col border-r bg-background">
         <div className="flex h-12 items-center gap-2 border-b px-5">
           <div className="font-semibold">OpenManus v2.0</div>
-          {isThinking && <div className="text-xs text-muted-foreground">Working</div>}
+          {isThinking ? (
+            <div className="text-xs text-muted-foreground">Working</div>
+          ) : lastFinishedAt ? (
+            <div className="text-xs text-muted-foreground">
+              Idle · last completed {lastFinishedAt.toLocaleTimeString()}
+            </div>
+          ) : (
+            <div className="text-xs text-muted-foreground">Idle</div>
+          )}
           <div className="ml-auto flex items-center gap-2">
             <button
               className="inline-flex h-7 items-center gap-1 rounded border px-2 text-[11px] hover:bg-muted"

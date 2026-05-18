@@ -454,6 +454,9 @@ const TerminalOutputPreview = ({ messages }: { messages: Message[] }) => {
 const ChangesPreview = ({ messages }: { messages: Message[] }) => {
   const changes = messages.filter(message => message.type === 'agent:lifecycle:step:act:tool:file:updated');
   const completions = messages.filter(message => message.type === 'agent:lifecycle:complete');
+  const uniqueFiles = Array.from(new Set(changes.map(message => String(message.content.path || '')).filter(Boolean)));
+  const totalAdded = changes.reduce((sum, message) => sum + Number(message.content?.added_lines || 0), 0);
+  const totalDeleted = changes.reduce((sum, message) => sum + Number(message.content?.deleted_lines || 0), 0);
   return (
     <div className="h-full min-h-0 p-4">
       <Card className="flex h-full min-h-0 flex-col overflow-hidden">
@@ -463,9 +466,32 @@ const ChangesPreview = ({ messages }: { messages: Message[] }) => {
         </CardHeader>
         <CardContent className="min-h-0 flex-1 overflow-auto">
           <div className="space-y-2">
+            {uniqueFiles.length > 0 ? (
+              <div className="rounded-md border bg-muted/30 p-2">
+                <div className="text-sm font-medium">
+                  {uniqueFiles.length} file{uniqueFiles.length === 1 ? '' : 's'} changed
+                  <span className="ml-2 font-mono text-emerald-600">+{totalAdded}</span>
+                  <span className="ml-1 font-mono text-rose-600">-{totalDeleted}</span>
+                </div>
+                <div className="mt-1 space-y-1">
+                  {uniqueFiles.slice(0, 8).map(path => (
+                    <div key={path} className="font-mono text-xs text-muted-foreground">
+                      {path}
+                    </div>
+                  ))}
+                  {uniqueFiles.length > 8 ? (
+                    <div className="text-xs text-muted-foreground">+{uniqueFiles.length - 8} more files</div>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
             {changes.map((message, index) => (
               <div key={message.index || index} className="rounded-md border p-2">
-                <div className="font-mono text-sm">{String(message.content.path || '')}</div>
+                <div className="font-mono text-sm">
+                  {String(message.content.path || '')}
+                  <span className="ml-2 text-emerald-600">+{Number(message.content?.added_lines || 0)}</span>
+                  <span className="ml-1 text-rose-600">-{Number(message.content?.deleted_lines || 0)}</span>
+                </div>
                 <div className="text-muted-foreground text-xs">{String(message.content.tool || 'tool')}</div>
                 {Array.isArray(message.content?.diff_preview?.lines) && message.content.diff_preview.lines.length > 0 ? (
                   <pre className="mt-2 overflow-auto rounded-md border bg-zinc-950 p-2 font-mono text-xs leading-5 text-zinc-100">

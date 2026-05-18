@@ -95,7 +95,7 @@ AVAILABLE_TOOLS = [
     {"name": "bash", "label": "Bash", "scope": "terminal"},
     {"name": "browser_use", "label": "Browser", "scope": "browser"},
     {"name": "web_search", "label": "Web Search", "scope": "browser"},
-    {"name": "str_replace_editor", "label": "File Editor", "scope": "code"},
+    {"name": "apply_patch_editor", "label": "Patch Editor", "scope": "code"},
     {"name": "memory_save", "label": "Memory Save", "scope": "memory"},
     {"name": "memory_recall", "label": "Memory Recall", "scope": "memory"},
     {"name": "ask_human", "label": "Ask Human", "scope": "conversation"},
@@ -417,26 +417,23 @@ def _agentmemory_health(conversation_id: Optional[str] = None) -> dict:
         "available": False,
         "live": False,
         "reason": "Disabled",
-        "base_url": config.agentmemory.base_url,
+        "base_url": "local_sqlite",
         "project": config.agentmemory.project,
     }
     if not config.agentmemory.enabled:
         return payload
 
     try:
-        import httpx
-
-        with httpx.Client(timeout=max(1, config.agentmemory.timeout_seconds)) as client:
-            response = client.get(f"{config.agentmemory.base_url.rstrip('/')}/livez")
-            payload["available"] = response.status_code < 500
-            payload["live"] = response.is_success
-            payload["reason"] = (
-                "Live" if response.is_success else f"HTTP {response.status_code}"
-            )
+        # Check SQLite DB health by attempting to connect and query
+        with agentmemory._get_conn() as conn:
+            conn.execute("SELECT 1 FROM memories LIMIT 1")
+        payload["available"] = True
+        payload["live"] = True
+        payload["reason"] = "Live (Local SQLite FTS5)"
     except Exception as exc:
         payload["available"] = False
         payload["live"] = False
-        payload["reason"] = str(exc)
+        payload["reason"] = f"SQLite failed: {exc}"
 
     if payload["live"] and conversation_id:
         # Optional lightweight probe for conversation-specific recall viability.
