@@ -876,6 +876,35 @@ class LLM:
             OpenAIError: If API call fails after retries
             Exception: For unexpected errors
         """
+        def _template_error_text(exc: Exception) -> str:
+            return str(exc).lower()
+
+        def _is_template_user_query_error(exc: Exception) -> bool:
+            text = _template_error_text(exc)
+            return "no user query found in messages" in text or (
+                "jinja template" in text and "prompt template" in text
+            )
+
+        def _build_template_fallback_messages(source_messages: List[dict]) -> List[dict]:
+            # Preserve intent while avoiding brittle tool/template transcript shapes.
+            snippets: list[str] = []
+            for msg in reversed(source_messages):
+                role = str(msg.get("role") or "")
+                content = str(msg.get("content") or "").strip()
+                if role in {"assistant", "tool", "user"} and content:
+                    snippets.append(f"{role}: {content[:500]}")
+                if len(snippets) >= 8:
+                    break
+            snippets.reverse()
+            fallback_prompt = (
+                "The local model template rejected the full tool transcript. "
+                "Continue the task from this compact context. "
+                "Return a FINAL SUMMARY now with: completed work, verification, "
+                "artifacts/paths, and remaining limitations. Do not request more tools.\n\n"
+                + ("\n".join(snippets) if snippets else "No prior context available.")
+            )
+            return [{"role": "user", "content": fallback_prompt}]
+
         try:
             # Validate tool_choice
             if tool_choice not in TOOL_CHOICE_VALUES:
@@ -972,7 +1001,55 @@ class LLM:
                 logger.error("Rate limit exceeded. Consider increasing retry attempts.")
             elif isinstance(oe, APIError):
                 logger.error(f"API error: {oe}")
-            if "No user query found in messages" in str(oe):
+            if _is_template_user_query_error(oe):
+                # One-shot fallback for brittle local templates:
+                # retry with a compact plain user message and no tool schema.
+                try:
+                    emit_current_task(
+                        "warning",
+                        {
+                            "message": "Model template rejected tool transcript; using compact fallback prompt.",
+                            "detail": str(oe),
+                            "fatal": False,
+                        },
+                    )
+                    fallback_messages = _build_template_fallback_messages(messages)
+                    fallback_params = {
+                        "model": model,
+                        "messages": fallback_messages,
+                        "timeout": timeout,
+                        "stream": False,
+                    }
+                    if model in REASONING_MODELS:
+                        fallback_params["max_completion_tokens"] = self.active_max_tokens()
+                    else:
+                        fallback_params["max_tokens"] = self.active_max_tokens()
+                        fallback_params["temperature"] = (
+                            temperature
+                            if temperature is not None
+                            else self.active_temperature()
+                        )
+                    fallback_response: ChatCompletion = (
+                        await self.active_client().chat.completions.create(**fallback_params)
+                    )
+                    if (
+                        fallback_response.choices
+                        and fallback_response.choices[0].message is not None
+                    ):
+                        usage = fallback_response.usage
+                        if usage is not None:
+                            self.update_token_count(
+                                usage.prompt_tokens, usage.completion_tokens
+                            )
+                        # Mark fallback summaries so the agent can terminate gracefully.
+                        fb_msg = fallback_response.choices[0].message
+                        if fb_msg.content:
+                            fb_msg.content = (
+                                "[TEMPLATE_FALLBACK_FINAL]\n" + fb_msg.content
+                            )
+                        return fb_msg
+                except Exception as fallback_error:
+                    logger.error(f"Fallback after template error failed: {fallback_error}")
                 raise ValueError(
                     "Model prompt template rejected this tool-call transcript "
                     "(No user query found). Use a tool-capable template/model."
