@@ -1,14 +1,18 @@
 import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { getAdminSettings, updateAdminSettings, type AdminSettings } from '@/services/admin';
-import { Save } from 'lucide-react';
+import { Save, ShieldCheck, SlidersHorizontal, Wrench } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 
 export default function AdminPage() {
   const [settings, setSettings] = useState<AdminSettings | null>(null);
   const [configOverridesText, setConfigOverridesText] = useState('{}');
+  const [fallbackChainText, setFallbackChainText] = useState('[]');
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
@@ -16,6 +20,9 @@ export default function AdminPage() {
       .then(data => {
         setSettings(data);
         setConfigOverridesText(JSON.stringify(data.config_overrides || {}, null, 2));
+        setFallbackChainText(
+          JSON.stringify(data.llm_connection?.fallback_chain || [], null, 2),
+        );
       })
       .catch(error => toast.error(error.message));
   }, []);
@@ -36,13 +43,23 @@ export default function AdminPage() {
     setIsSaving(true);
     try {
       const configOverrides = JSON.parse(configOverridesText || '{}');
+      const fallbackChain = JSON.parse(fallbackChainText || '[]');
+      if (!Array.isArray(fallbackChain)) {
+        throw new Error('Fallback chain must be a JSON array');
+      }
       const saved = await updateAdminSettings({
-        llm_connection: settings.llm_connection,
+        llm_connection: {
+          ...settings.llm_connection,
+          fallback_chain: fallbackChain,
+        },
         tools: settings.tools,
         config_overrides: configOverrides,
       });
       setSettings(saved);
       setConfigOverridesText(JSON.stringify(saved.config_overrides || {}, null, 2));
+      setFallbackChainText(
+        JSON.stringify(saved.llm_connection?.fallback_chain || [], null, 2),
+      );
       toast.success('Admin settings saved');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not save settings');
@@ -53,11 +70,11 @@ export default function AdminPage() {
 
   return (
     <div className="h-full overflow-y-auto p-6">
-      <div className="mx-auto max-w-5xl space-y-8">
-        <div className="flex items-center justify-between">
+      <div className="mx-auto max-w-5xl space-y-6">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card p-4">
           <div>
-            <h1 className="text-2xl font-semibold">Admin</h1>
-            <p className="text-sm text-muted-foreground">Connection settings and global tool availability.</p>
+            <h1 className="text-xl font-semibold">Admin Console</h1>
+            <p className="text-sm text-muted-foreground">Runtime connection, overrides, and global capability controls.</p>
           </div>
           <Button onClick={save} disabled={isSaving}>
             <Save className="size-4" />
@@ -65,105 +82,163 @@ export default function AdminPage() {
           </Button>
         </div>
 
-        <section className="space-y-3">
-          <h2 className="text-sm font-medium uppercase text-muted-foreground">Model Connection</h2>
-          <p className="text-sm text-muted-foreground">
-            Defaults are loaded from config.toml. Saving here creates a runtime override used by new agent runs.
-          </p>
-          <div className="grid gap-3 md:grid-cols-2">
-            <Input
-              placeholder="Model"
-              value={settings.llm_connection.model || ''}
-              onChange={event =>
-                setSettings({ ...settings, llm_connection: { ...settings.llm_connection, model: event.target.value } })
-              }
-            />
-            <Input
-              placeholder="API type: openai, azure, aws"
-              value={settings.llm_connection.api_type || 'openai'}
-              onChange={event =>
-                setSettings({ ...settings, llm_connection: { ...settings.llm_connection, api_type: event.target.value } })
-              }
-            />
-            <Input
-              placeholder="Base URL"
-              value={settings.llm_connection.base_url || ''}
-              onChange={event =>
-                setSettings({ ...settings, llm_connection: { ...settings.llm_connection, base_url: event.target.value } })
-              }
-            />
-            <Input
-              placeholder="API key"
-              type="password"
-              value={settings.llm_connection.api_key || ''}
-              onChange={event =>
-                setSettings({ ...settings, llm_connection: { ...settings.llm_connection, api_key: event.target.value } })
-              }
-            />
-            <Input
-              placeholder="Max tokens"
-              type="number"
-              value={settings.llm_connection.max_tokens || ''}
-              onChange={event =>
-                setSettings({
-                  ...settings,
-                  llm_connection: { ...settings.llm_connection, max_tokens: Number(event.target.value) || undefined },
-                })
-              }
-            />
-            <Input
-              placeholder="Temperature"
-              type="number"
-              step="0.1"
-              value={settings.llm_connection.temperature ?? ''}
-              onChange={event =>
-                setSettings({
-                  ...settings,
-                  llm_connection: { ...settings.llm_connection, temperature: Number(event.target.value) },
-                })
-              }
-            />
-          </div>
-        </section>
-
-        <section className="space-y-3">
-          <h2 className="text-sm font-medium uppercase text-muted-foreground">Loaded Config Defaults</h2>
-          <pre className="max-h-96 overflow-auto rounded-md border bg-muted p-3 text-xs">
-            {JSON.stringify(settings.config_defaults || {}, null, 2)}
-          </pre>
-        </section>
-
-        <section className="space-y-3">
-          <h2 className="text-sm font-medium uppercase text-muted-foreground">Runtime Config Overrides</h2>
-          <p className="text-sm text-muted-foreground">
-            Store overrides for config paths here. Hooks are available server-side through runtime settings.
-          </p>
-          <Textarea
-            className="min-h-64 font-mono text-xs"
-            value={configOverridesText}
-            onChange={event => setConfigOverridesText(event.target.value)}
-          />
-        </section>
-
-        <section className="space-y-3">
-          <h2 className="text-sm font-medium uppercase text-muted-foreground">Global Tools</h2>
-          <div className="grid gap-2 md:grid-cols-2">
-            {settings.available_tools.map(tool => (
-              <label key={tool.name} className="flex items-center justify-between rounded-md border p-3 text-sm">
-                <span>
-                  <span className="block font-medium">{tool.label}</span>
-                  <span className="text-xs text-muted-foreground">{tool.name}</span>
-                </span>
-                <input
-                  type="checkbox"
-                  checked={!disabled.has(tool.name)}
-                  disabled={tool.locked}
-                  onChange={() => toggleTool(tool.name)}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <ShieldCheck className="size-4" />
+              Model Connection
+            </CardTitle>
+            <CardDescription>
+              Overrides here become the active runtime defaults for new agent runs.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Model</Label>
+                <Input
+                  placeholder="qwen3.5-coder"
+                  value={settings.llm_connection.model || ''}
+                  onChange={event =>
+                    setSettings({ ...settings, llm_connection: { ...settings.llm_connection, model: event.target.value } })
+                  }
                 />
-              </label>
-            ))}
-          </div>
-        </section>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">API Type</Label>
+                <Input
+                  placeholder="openai | lmstudio | ollama | azure"
+                  value={settings.llm_connection.api_type || 'openai'}
+                  onChange={event =>
+                    setSettings({ ...settings, llm_connection: { ...settings.llm_connection, api_type: event.target.value } })
+                  }
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Base URL</Label>
+                <Input
+                  placeholder="http://127.0.0.1:1234"
+                  value={settings.llm_connection.base_url || ''}
+                  onChange={event =>
+                    setSettings({ ...settings, llm_connection: { ...settings.llm_connection, base_url: event.target.value } })
+                  }
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">API Key</Label>
+                <Input
+                  placeholder="Optional"
+                  type="password"
+                  value={settings.llm_connection.api_key || ''}
+                  onChange={event =>
+                    setSettings({ ...settings, llm_connection: { ...settings.llm_connection, api_key: event.target.value } })
+                  }
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Max Tokens</Label>
+                <Input
+                  placeholder="4096"
+                  type="number"
+                  value={settings.llm_connection.max_tokens || ''}
+                  onChange={event =>
+                    setSettings({
+                      ...settings,
+                      llm_connection: { ...settings.llm_connection, max_tokens: Number(event.target.value) || undefined },
+                    })
+                  }
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Temperature</Label>
+                <Input
+                  placeholder="0.7"
+                  type="number"
+                  step="0.1"
+                  value={settings.llm_connection.temperature ?? ''}
+                  onChange={event =>
+                    setSettings({
+                      ...settings,
+                      llm_connection: { ...settings.llm_connection, temperature: Number(event.target.value) },
+                    })
+                  }
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground">Fallback Chain (ordered)</Label>
+              <Textarea
+                className="min-h-44 font-mono text-xs"
+                value={fallbackChainText}
+                onChange={event => setFallbackChainText(event.target.value)}
+                placeholder={`[
+  { "api_type": "lmstudio", "base_url": "http://10.153.2.8:1234", "model": "qwen3.5" },
+  { "api_type": "openai", "base_url": "https://api.openai.com/v1", "model": "gpt-4o-mini" }
+]`}
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <SlidersHorizontal className="size-4" />
+              Runtime Config Overrides
+            </CardTitle>
+            <CardDescription>
+              Global config patch object applied by server-side runtime hooks.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Textarea
+              className="min-h-64 font-mono text-xs"
+              value={configOverridesText}
+              onChange={event => setConfigOverridesText(event.target.value)}
+            />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Wrench className="size-4" />
+              Global Tools
+            </CardTitle>
+            <CardDescription>
+              Disable or enable capability surfaces for all users. `terminate` remains protected.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-2 md:grid-cols-2">
+              {settings.available_tools.map(tool => (
+                <label key={tool.name} className="flex items-center justify-between rounded-md border p-3 text-sm">
+                  <span>
+                    <span className="block font-medium">{tool.label}</span>
+                    <span className="text-xs text-muted-foreground">{tool.name}</span>
+                  </span>
+                  <Checkbox
+                    checked={!disabled.has(tool.name)}
+                    disabled={tool.locked}
+                    onCheckedChange={() => toggleTool(tool.name)}
+                  />
+                </label>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">Loaded Config Defaults</CardTitle>
+            <CardDescription>Read-only values loaded from configuration sources.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <pre className="max-h-96 overflow-auto rounded-md border bg-muted p-3 text-xs">
+              {JSON.stringify(settings.config_defaults || {}, null, 2)}
+            </pre>
+          </CardContent>
+        </Card>
       </div>
     </div>
   );

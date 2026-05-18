@@ -24,8 +24,18 @@ class ChatMessageAggregator {
     let currentAct: AggregatedMessage | null = null;
     let currentTool: AggregatedMessage | null = null;
     let currentBrowser: AggregatedMessage | null = null;
+    let currentToolsById: Record<string, AggregatedMessage> = {};
     let currentPlan: AggregatedMessage | null = null;
     let currentPrepare: AggregatedMessage | null = null;
+    const ensureLifecycle = (seed: Message) => {
+      if (currentLifecycle) return currentLifecycle;
+      currentLifecycle = {
+        ...seed,
+        type: 'agent:lifecycle',
+        messages: [],
+      } as AggregatedMessage;
+      return currentLifecycle;
+    };
 
     for (const message of this._messages) {
       // Handle non-lifecycle messages
@@ -49,6 +59,7 @@ class ChatMessageAggregator {
 
       // Handle plan messages
       if (message.type?.startsWith('agent:lifecycle:plan')) {
+        ensureLifecycle(message);
         if (message.type === 'agent:lifecycle:plan:start') {
           currentPlan = {
             ...message,
@@ -66,6 +77,7 @@ class ChatMessageAggregator {
 
       // Handle prepare messages
       if (message.type?.startsWith('agent:lifecycle:prepare')) {
+        ensureLifecycle(message);
         if (message.type === 'agent:lifecycle:prepare:start') {
           currentPrepare = {
             ...message,
@@ -88,6 +100,7 @@ class ChatMessageAggregator {
         message.type === 'agent:lifecycle:memory:added' ||
         message.type === 'agent:lifecycle:state:change'
       ) {
+        ensureLifecycle(message);
         if (currentLifecycle && 'messages' in currentLifecycle) {
           currentLifecycle.messages.push(message);
         }
@@ -96,11 +109,13 @@ class ChatMessageAggregator {
 
       // Handle step messages
       if (message.type === 'agent:lifecycle:step:start') {
+        ensureLifecycle(message);
         currentStep = {
           ...message,
           type: 'agent:lifecycle:step',
           messages: [message],
         };
+        currentToolsById = {};
         if (currentLifecycle && 'messages' in currentLifecycle) {
           currentLifecycle.messages.push(currentStep);
         }
@@ -109,6 +124,17 @@ class ChatMessageAggregator {
 
       // Handle think messages
       if (message.type?.startsWith('agent:lifecycle:step:think')) {
+        ensureLifecycle(message);
+        if (!currentStep) {
+          currentStep = {
+            ...message,
+            type: 'agent:lifecycle:step',
+            messages: [],
+          } as AggregatedMessage;
+          if (currentLifecycle && 'messages' in currentLifecycle) {
+            currentLifecycle.messages.push(currentStep);
+          }
+        }
         if (message.type === 'agent:lifecycle:step:think:start') {
           currentThink = {
             ...message,
@@ -126,6 +152,17 @@ class ChatMessageAggregator {
 
       // Handle act messages
       if (message.type?.startsWith('agent:lifecycle:step:act')) {
+        ensureLifecycle(message);
+        if (!currentStep) {
+          currentStep = {
+            ...message,
+            type: 'agent:lifecycle:step',
+            messages: [],
+          } as AggregatedMessage;
+          if (currentLifecycle && 'messages' in currentLifecycle) {
+            currentLifecycle.messages.push(currentStep);
+          }
+        }
         if (message.type === 'agent:lifecycle:step:act:start') {
           currentAct = {
             ...message,
@@ -146,11 +183,19 @@ class ChatMessageAggregator {
               type: 'agent:lifecycle:step:act:tool',
               messages: [message],
             };
+            const toolId = message.content?.id ? String(message.content.id) : '';
+            if (toolId) {
+              currentToolsById[toolId] = currentTool;
+            }
             if (currentAct && 'messages' in currentAct) {
               currentAct.messages.push(currentTool);
             }
-          } else if (currentTool && 'messages' in currentTool) {
-            currentTool.messages.push(message);
+          } else {
+            const toolId = message.content?.id ? String(message.content.id) : '';
+            const targetTool = (toolId && currentToolsById[toolId]) || currentTool;
+            if (targetTool && 'messages' in targetTool) {
+              targetTool.messages.push(message);
+            }
           }
           continue;
         }
@@ -181,6 +226,17 @@ class ChatMessageAggregator {
 
       // Handle step completion
       if (message.type === 'agent:lifecycle:step:complete' || message.type === 'agent:lifecycle:step:error') {
+        ensureLifecycle(message);
+        if (!currentStep) {
+          currentStep = {
+            ...message,
+            type: 'agent:lifecycle:step',
+            messages: [],
+          } as AggregatedMessage;
+          if (currentLifecycle && 'messages' in currentLifecycle) {
+            currentLifecycle.messages.push(currentStep);
+          }
+        }
         if (currentStep && 'messages' in currentStep) {
           currentStep.messages.push(message);
           // Reset step-related references
@@ -188,6 +244,7 @@ class ChatMessageAggregator {
           currentAct = null;
           currentTool = null;
           currentBrowser = null;
+          currentToolsById = {};
           currentStep = null;
         }
       }

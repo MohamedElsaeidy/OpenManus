@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import docker
-from docker.errors import NotFound
+from docker.errors import APIError, NotFound
 
 from app.config import SandboxSettings
 
@@ -50,6 +50,10 @@ class ConversationSandbox:
         except NotFound:
             pass
 
+        return await self._create_container()
+
+    async def _create_container(self, _retried: bool = False) -> "ConversationSandbox":
+        """Create a fresh sandbox container, auto-removing stale conflicts."""
         binds = {
             str(self.host_workspace): {
                 "bind": self.config.work_dir,
@@ -68,22 +72,35 @@ class ConversationSandbox:
             network_mode="bridge" if self.config.network_enabled else "none",
             binds=binds,
         )
-        container_data = await asyncio.to_thread(
-            self.api.create_container,
-            image=self.config.image,
-            command="tail -f /dev/null",
-            hostname="openmanus-sandbox",
-            working_dir=self.config.work_dir,
-            environment={"DOCKER_HOST": "unix:///var/run/docker.sock"},
-            host_config=host_config,
-            name=self.name,
-            labels={
-                "openmanus.kind": "conversation-sandbox",
-                "openmanus.conversation_id": self.conversation_id,
-            },
-            tty=True,
-            detach=True,
-        )
+        try:
+            container_data = await asyncio.to_thread(
+                self.api.create_container,
+                image=self.config.image,
+                command="tail -f /dev/null",
+                hostname="openmanus-sandbox",
+                working_dir=self.config.work_dir,
+                environment={"DOCKER_HOST": "unix:///var/run/docker.sock"},
+                host_config=host_config,
+                name=self.name,
+                labels={
+                    "openmanus.kind": "conversation-sandbox",
+                    "openmanus.conversation_id": self.conversation_id,
+                },
+                tty=True,
+                detach=True,
+            )
+        except APIError as exc:
+            if exc.status_code == 409 and not _retried:
+                # Stale container with the same name – remove it and retry once.
+                try:
+                    stale = await asyncio.to_thread(
+                        self.client.containers.get, self.name
+                    )
+                    await asyncio.to_thread(stale.remove, force=True)
+                except Exception:
+                    pass
+                return await self._create_container(_retried=True)
+            raise
         self.container = self.client.containers.get(container_data["Id"])
         await asyncio.to_thread(self.container.start)
         return self
@@ -137,7 +154,10 @@ class ConversationSandbox:
 
     async def _start_if_needed(self) -> None:
         assert self.container is not None
-        self.container.reload()
+        await asyncio.to_thread(self.container.reload)
+        if self.container.status == "paused":
+            await asyncio.to_thread(self.container.unpause)
+            return
         if self.container.status != "running":
             await asyncio.to_thread(self.container.start)
 

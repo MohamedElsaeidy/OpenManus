@@ -8,6 +8,7 @@ import { aggregateMessages } from '@/libs/chat-messages';
 import type { Message } from '@/libs/chat-messages/types';
 import {
   getConversationHistory,
+  getConversationHistoryAll,
   getIntegrationsHealth,
   sendConversationMessage,
   type IntegrationsHealth,
@@ -24,10 +25,11 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
   const routeConversationId = params.conversationId as string | undefined;
   const navigate = useNavigate();
 
-  const { setData: setPreviewData } = usePreviewData();
+  const { data: previewData, setData: setPreviewData } = usePreviewData();
   const { refreshConversations, setActiveConversationId } = useConversations();
 
   const [messages, setMessages] = useState<Message[]>([]);
+  const [historyWindow, setHistoryWindow] = useState(80);
   const [activeTaskId, setActiveTaskId] = useState<string | undefined>(routeTaskId);
   const [isThinking, setIsThinking] = useState(false);
   const [isTerminating, setIsTerminating] = useState(false);
@@ -40,12 +42,17 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
   );
 
   const eventSourceRef = useRef<EventSource | null>(null);
+  const eventErrorCountRef = useRef(0);
   const isTaskCompletedRef = useRef(false);
   const shouldAutoScrollRef = useRef(false);
   const seenEventKeysRef = useRef<Set<string>>(new Set());
 
   const { containerRef: messagesContainerRef, shouldAutoScroll, handleScroll, scrollToBottom } = useAutoScroll();
-  const aggregatedMessages = useMemo(() => aggregateMessages(messages), [messages]);
+  const visibleMessages = useMemo(() => {
+    if (historyWindow >= messages.length) return messages;
+    return messages.slice(messages.length - historyWindow);
+  }, [historyWindow, messages]);
+  const aggregatedMessages = useMemo(() => aggregateMessages(visibleMessages), [visibleMessages]);
 
   useEffect(() => {
     shouldAutoScrollRef.current = shouldAutoScroll;
@@ -103,6 +110,7 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
 
     const eventSource = getTaskEvents({ taskId });
     eventSourceRef.current = eventSource;
+    eventErrorCountRef.current = 0;
 
     eventSource.onmessage = event => {
       try {
@@ -175,11 +183,18 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
         return;
       }
 
+      eventErrorCountRef.current += 1;
       let errorMessage = 'Connection error';
 
       if (eventSource.readyState === EventSource.CONNECTING) {
         console.error('Connection failed - trying to reconnect...');
-        errorMessage = 'Connection failed, trying to reconnect...';
+        // Browser auto-reconnect is expected transient behavior for SSE.
+        // Avoid noisy toasts unless retries persist.
+        if (eventErrorCountRef.current >= 4) {
+          errorMessage = 'Connection unstable, retrying...';
+          toast.error(errorMessage);
+        }
+        return;
       } else if (eventSource.readyState === EventSource.CLOSED) {
         console.error('Connection closed');
         errorMessage = 'Connection closed';
@@ -204,45 +219,60 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
   }, [applyPreviewFromMessage, toMessage]);
 
   const loadConversation = useCallback(async (targetConversationId: string) => {
-    const history = await getConversationHistory(targetConversationId);
-    const nextMessages = history.events.map(event => {
-      const key = event.id || `${event.task_id || ''}:${event.name}:${JSON.stringify(event.content || {})}`;
-      seenEventKeysRef.current.add(key);
-      return toMessage({ ...event, id: key });
-    });
-    const latestTask = [...history.tasks].reverse().find(Boolean);
-    const activeTask = [...history.tasks].reverse().find(task => !['COMPLETED', 'FAILED', 'INTERRUPTED'].includes(String(task.status || '')));
-    setMessages(nextMessages);
-    setConversationId(targetConversationId);
-    setActiveTaskId(activeTask?.task_id || latestTask?.task_id);
-    setActiveConversationId(targetConversationId);
-    setIsTaskCompleted(!activeTask && Boolean(latestTask));
-    isTaskCompletedRef.current = !activeTask && Boolean(latestTask);
-    setIsThinking(Boolean(activeTask));
-    setIsTerminating(false);
-    if (nextMessages.length) {
-      const lastPreviewMessage = [...nextMessages].reverse().find(message =>
-        message.type === 'agent:lifecycle:step:think:browser:browse:complete' ||
-        message.type === 'agent:lifecycle:step:act:tool:execute:start' ||
-        message.type === 'agent:lifecycle:step:act:tool:file:updated'
-      );
-      if (lastPreviewMessage) applyPreviewFromMessage(lastPreviewMessage);
-    }
-    if (activeTask?.task_id) {
-      setupEventSource(activeTask.task_id);
+    try {
+      let history = await getConversationHistoryAll(targetConversationId);
+      // Defensive fallback for legacy/misaligned event windows:
+      // retry with a larger page before replacing the chat with empty content.
+      if ((!history.events || history.events.length === 0) && (history.tasks || []).length > 0) {
+        history = await getConversationHistory(targetConversationId, 1200);
+      }
+      seenEventKeysRef.current = new Set();
+      const nextMessages = history.events.map(event => {
+        const key = event.id || `${event.task_id || ''}:${event.name}:${JSON.stringify(event.content || {})}`;
+        seenEventKeysRef.current.add(key);
+        return toMessage({ ...event, id: key });
+      });
+      if (nextMessages.length === 0 && messages.length > 0) {
+        // Keep current UI state instead of wiping chat on an empty history payload.
+        setConversationId(targetConversationId);
+        setActiveConversationId(targetConversationId);
+        return;
+      }
+      const latestTask = [...history.tasks].reverse().find(Boolean);
+      const activeTask = [...history.tasks].reverse().find(task => !['COMPLETED', 'FAILED', 'INTERRUPTED'].includes(String(task.status || '')));
+      setMessages(nextMessages);
+      setHistoryWindow(80);
+      setConversationId(targetConversationId);
+      setActiveTaskId(activeTask?.task_id || latestTask?.task_id);
+      setActiveConversationId(targetConversationId);
+      setIsTaskCompleted(!activeTask && Boolean(latestTask));
+      isTaskCompletedRef.current = !activeTask && Boolean(latestTask);
+      setIsThinking(Boolean(activeTask));
+      setIsTerminating(false);
+      if (nextMessages.length) {
+        const lastPreviewMessage = [...nextMessages].reverse().find(message =>
+          message.type === 'agent:lifecycle:step:think:browser:browse:complete' ||
+          message.type === 'agent:lifecycle:step:act:tool:execute:start' ||
+          message.type === 'agent:lifecycle:step:act:tool:file:updated'
+        );
+        if (lastPreviewMessage) applyPreviewFromMessage(lastPreviewMessage);
+      }
+      if (activeTask?.task_id) {
+        setupEventSource(activeTask.task_id);
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not load conversation history');
+      // Keep current in-memory messages instead of wiping the chat on transient backend errors.
+      setConversationId(targetConversationId);
+      setActiveConversationId(targetConversationId);
     }
   }, [applyPreviewFromMessage, setActiveConversationId, setupEventSource, toMessage]);
 
   useEffect(() => {
     let cancelled = false;
 
-    setMessages([]);
-    setActiveTaskId(undefined);
-    seenEventKeysRef.current = new Set();
-    setPreviewData(null);
-    setIsTaskCompleted(false);
-    setConversationId(undefined);
-    isTaskCompletedRef.current = false;
+    // Do not clear the UI before remote history loads successfully.
+    // This prevents "empty chat" when backend restarts or transient network errors happen.
     setIsThinking(false);
     setIsTerminating(false);
     if (!routeTaskId && !routeConversationId) return;
@@ -287,6 +317,15 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
       requestAnimationFrame(scrollToBottom);
     }
   }, [messages, shouldAutoScroll, scrollToBottom]);
+
+  useEffect(() => {
+    // On first open, jump to latest messages.
+    requestAnimationFrame(() => {
+      if (messagesContainerRef.current) {
+        messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+      }
+    });
+  }, [conversationId, messagesContainerRef]);
 
   useEffect(() => {
     return () => {
@@ -406,24 +445,17 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
           <div className="font-semibold">OpenManus v2.0</div>
           {isThinking && <div className="text-xs text-muted-foreground">Working</div>}
           <div className="ml-auto flex items-center gap-2">
-            <div
-              className="rounded border px-2 py-0.5 text-[11px]"
-              title={integrationsHealth?.agentmemory?.reason || 'AgentMemory status unknown'}
+            <button
+              className="inline-flex h-7 items-center gap-1 rounded border px-2 text-[11px] hover:bg-muted"
+              onClick={() => {
+                setIsPreviewCollapsed(false);
+                setPreviewData({ type: 'live' });
+              }}
+              title="Open live monitor"
+              aria-label="Open live monitor"
             >
-              AgentMemory:{' '}
-              <span className={integrationsHealth?.agentmemory?.live ? 'text-emerald-500' : integrationsHealth?.agentmemory?.enabled ? 'text-amber-500' : 'text-muted-foreground'}>
-                {integrationsHealth?.agentmemory?.live ? 'Live' : integrationsHealth?.agentmemory?.enabled ? 'Down' : 'Disabled'}
-              </span>
-            </div>
-            <div
-              className="rounded border px-2 py-0.5 text-[11px]"
-              title={integrationsHealth?.obsidian?.reason || 'Obsidian status unknown'}
-            >
-              Obsidian:{' '}
-              <span className={integrationsHealth?.obsidian?.live ? 'text-emerald-500' : 'text-amber-500'}>
-                {integrationsHealth?.obsidian?.live ? 'Live' : 'Waiting'}
-              </span>
-            </div>
+              Live
+            </button>
             <button
               className="inline-flex h-7 w-7 items-center justify-center rounded border hover:bg-muted"
               onClick={() => setIsPreviewCollapsed(current => !current)}
@@ -457,7 +489,22 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
               scrollBehavior: 'smooth',
               overscrollBehavior: 'contain',
             }}
-            onScroll={handleScroll}
+            onScroll={() => {
+              handleScroll();
+              const el = messagesContainerRef.current;
+              if (!el) return;
+              // Lazy-reveal older history only when the user intentionally scrolls up.
+              if (el.scrollTop < 120 && historyWindow < messages.length) {
+                const prevHeight = el.scrollHeight;
+                setHistoryWindow(windowSize => Math.min(messages.length, windowSize + 80));
+                requestAnimationFrame(() => {
+                  const target = messagesContainerRef.current;
+                  if (!target) return;
+                  const diff = target.scrollHeight - prevHeight;
+                  target.scrollTop = target.scrollTop + diff;
+                });
+              }
+            }}
           >
             <ChatMessages messages={aggregatedMessages} />
           </div>
@@ -475,7 +522,9 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
             taskId={activeTaskId || conversationId || 'workspace'}
             conversationId={conversationId}
             messages={messages}
+            integrationsHealth={integrationsHealth}
             performanceMode={performanceMode}
+            pollRuntime={isThinking || previewData?.type === 'runtime'}
           />
         </div>
       )}

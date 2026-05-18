@@ -2,6 +2,9 @@ import asyncio
 import json
 import os
 import re
+import time
+import urllib.parse
+import urllib.request
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -14,7 +17,7 @@ from app.config import config
 from app.memory.agentmemory import agentmemory
 from app.runtime_settings import get_disabled_tools, get_llm_connection
 from app.sandbox.conversation import ConversationSandbox
-from app.skills import format_skill_context, select_skills
+from app.skills import format_skill_context, load_skills, select_skills
 from app.task_context import (
     current_auto_context_compress,
     current_llm_connection,
@@ -29,6 +32,7 @@ from core.task_registry import TaskRegistry
 from server.celery_app import celery_app
 from server.models import (
     ConversationEventORM,
+    ConversationORM,
     ObsidianEdgeORM,
     ObsidianNoteORM,
     TaskORM,
@@ -39,9 +43,242 @@ registry = TaskRegistry()
 
 REDIS_URL = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0")
 DEFAULT_CONVERSATION_ID = os.getenv("OPENMANUS_DEFAULT_CONVERSATION_ID", "main")
+TASK_HARD_TIMEOUT_SECONDS = int(
+    os.getenv("OPENMANUS_TASK_HARD_TIMEOUT_SECONDS", "1800")
+)
 _redis_client: Optional[redis_lib.Redis] = None
 WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:[^\]]*)\]\]")
 TAG_RE = re.compile(r"(^|\s)#([A-Za-z0-9_\-\/]+)")
+
+
+def _lmstudio_native_base(base_url: str) -> Optional[str]:
+    try:
+        parsed = urllib.parse.urlparse((base_url or "").strip())
+    except Exception:
+        return None
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    root = f"{parsed.scheme}://{parsed.netloc}"
+    return f"{root}/api/v1"
+
+
+def _http_json(
+    method: str,
+    url: str,
+    payload: Optional[dict] = None,
+    token: Optional[str] = None,
+    timeout: int = 10,
+) -> dict:
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    body = None if payload is None else json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, method=method, headers=headers, data=body)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = resp.read()
+        return json.loads(data.decode("utf-8")) if data else {}
+
+
+def _connection_candidates(primary: dict) -> list[dict]:
+    base = dict(primary or {})
+    chain = base.get("fallback_chain", [])
+    if isinstance(chain, str):
+        try:
+            chain = json.loads(chain)
+        except Exception:
+            chain = []
+    candidates = [base]
+    if isinstance(chain, list):
+        for item in chain:
+            if isinstance(item, dict):
+                merged = dict(base)
+                merged.update(item)
+                candidates.append(merged)
+    deduped: list[dict] = []
+    seen: set[tuple[str, str, str]] = set()
+    for candidate in candidates:
+        key = (
+            str(candidate.get("api_type") or "").strip().lower(),
+            str(candidate.get("base_url") or "").strip(),
+            str(candidate.get("model") or "").strip(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(candidate)
+    return deduped
+
+
+def _is_connection_healthy(connection: dict, timeout: int = 5) -> tuple[bool, str]:
+    base_url = str(connection.get("base_url") or "").strip()
+    api_key = str(connection.get("api_key") or "").strip() or None
+    api_type = str(connection.get("api_type") or "").strip().lower()
+    if not base_url:
+        return False, "missing base_url"
+    try:
+        if api_type in {"lmstudio", "local"}:
+            native = _lmstudio_native_base(base_url)
+            if not native:
+                return False, "invalid lmstudio base_url"
+            _http_json("GET", f"{native}/models", token=api_key, timeout=timeout)
+            return True, "lmstudio /models ok"
+        # OpenAI-compatible default
+        _http_json(
+            "GET",
+            base_url.rstrip("/") + "/models"
+            if base_url.rstrip("/").endswith("/v1")
+            else base_url.rstrip("/") + "/v1/models",
+            token=api_key,
+            timeout=timeout,
+        )
+        return True, "v1/models ok"
+    except Exception as exc:
+        return False, str(exc)
+
+
+def resolve_llm_connection(connection: dict, task) -> dict:
+    candidates = _connection_candidates(connection or {})
+    for index, candidate in enumerate(candidates):
+        ok, detail = _is_connection_healthy(candidate)
+        task.emit(
+            "agent_state",
+            {
+                "state": "llm_preflight",
+                "candidate_index": index,
+                "api_type": str(candidate.get("api_type") or ""),
+                "base_url": str(candidate.get("base_url") or ""),
+                "ok": ok,
+                "detail": detail,
+            },
+        )
+        if ok:
+            selected = dict(candidate)
+            selected.pop("fallback_chain", None)
+            task.emit(
+                "agent_state",
+                {
+                    "state": "llm_selected",
+                    "candidate_index": index,
+                    "api_type": str(selected.get("api_type") or ""),
+                    "base_url": str(selected.get("base_url") or ""),
+                    "model": str(selected.get("model") or ""),
+                },
+            )
+            return selected
+    # No healthy candidate; fall back to original so existing behavior remains.
+    fallback = dict(connection or {})
+    fallback.pop("fallback_chain", None)
+    task.emit(
+        "agent_state",
+        {
+            "state": "llm_selected",
+            "candidate_index": -1,
+            "api_type": str(fallback.get("api_type") or ""),
+            "base_url": str(fallback.get("base_url") or ""),
+            "model": str(fallback.get("model") or ""),
+            "detail": "No healthy fallback candidate; using primary settings.",
+        },
+    )
+    return fallback
+
+
+def _persist_received_context_window(conversation_id: str, value: int) -> None:
+    try:
+        cid = uuid.UUID(str(conversation_id))
+    except Exception:
+        return
+    try:
+        with registry.SessionLocal() as session:
+            conversation = session.get(ConversationORM, cid)
+            if conversation is None:
+                return
+            settings = dict(conversation.settings or {})
+            settings["received_context_window"] = int(value)
+            settings["received_context_window_source"] = "lmstudio_load"
+            conversation.settings = settings
+            session.commit()
+    except Exception:
+        return
+
+
+def sync_lmstudio_context_window(
+    *,
+    conversation_id: str,
+    requested_context_window: Optional[int],
+    llm_connection: dict,
+    model: Optional[str],
+    task,
+) -> Optional[int]:
+    """For LM Studio connections, load model with requested context_length and return applied value."""
+    if not requested_context_window or requested_context_window <= 0:
+        return None
+
+    connection = llm_connection or {}
+    default_llm = config.llm.get("default") if isinstance(config.llm, dict) else None
+
+    base_url = str(
+        connection.get("base_url") or getattr(default_llm, "base_url", "") or ""
+    )
+    api_type = str(
+        connection.get("api_type") or getattr(default_llm, "api_type", "") or ""
+    ).lower()
+    api_key = str(
+        connection.get("api_key") or getattr(default_llm, "api_key", "") or ""
+    )
+    selected_model = str(
+        model or connection.get("model") or getattr(default_llm, "model", "") or ""
+    ).strip()
+
+    native_base = _lmstudio_native_base(base_url)
+    is_lmstudio = api_type in {"lmstudio", "local", "openai"} and (
+        ":1234" in base_url
+        or "lmstudio" in base_url
+        or "localhost" in base_url
+        or "127.0.0.1" in base_url
+    )
+    if not native_base or not is_lmstudio or not selected_model:
+        return None
+
+    try:
+        response = _http_json(
+            "POST",
+            f"{native_base}/models/load",
+            payload={
+                "model": selected_model,
+                "context_length": int(requested_context_window),
+                "echo_load_config": True,
+            },
+            token=api_key or None,
+            timeout=20,
+        )
+        load_config = response.get("load_config") if isinstance(response, dict) else {}
+        received = load_config.get("context_length") or response.get("context_length")
+        if received in (None, ""):
+            return None
+        received_value = int(received)
+        _persist_received_context_window(conversation_id, received_value)
+        task.emit(
+            "context_window_received",
+            {
+                "requested_window": int(requested_context_window),
+                "received_window": received_value,
+                "model": selected_model,
+                "source": "lmstudio_load",
+            },
+        )
+        return received_value
+    except Exception as exc:
+        task.emit(
+            "context_window_received",
+            {
+                "requested_window": int(requested_context_window),
+                "received_window": None,
+                "model": selected_model,
+                "source": "lmstudio_load",
+                "error": str(exc),
+            },
+        )
+        return None
 
 
 def get_redis() -> redis_lib.Redis:
@@ -191,6 +428,26 @@ def get_task_enable_vendor_skills(task_id: str) -> bool:
     return bool(raw)
 
 
+def get_task_pinned_skills(task_id: str) -> list[str]:
+    orm = get_task_record(task_id)
+    if orm is None:
+        return []
+    task_input = orm.input or {}
+    return [
+        str(name).strip()
+        for name in task_input.get("pinned_skills", [])
+        if str(name).strip()
+    ]
+
+
+def get_task_identity_notes(task_id: str) -> str:
+    orm = get_task_record(task_id)
+    if orm is None:
+        return ""
+    task_input = orm.input or {}
+    return str(task_input.get("identity_notes") or "").strip()
+
+
 def conversation_workspace(conversation_id: str) -> Path:
     return (
         Path(os.getenv("OPENMANUS_WORKSPACE_ROOT", "/app/workspace"))
@@ -297,6 +554,78 @@ def build_agentmemory_context(conversation_id: str, prompt: str) -> str:
     if not prompt or not agentmemory.enabled:
         return ""
     return agentmemory.format_context(conversation_id=conversation_id, query=prompt)
+
+
+def build_identity_context(identity_notes: str) -> str:
+    if not identity_notes:
+        return ""
+    return f"Persistent user profile/context for this conversation:\n{identity_notes}"
+
+
+def update_skill_suggestions(conversation_id: str, task_id: str, prompt: str) -> None:
+    if not prompt.strip():
+        return
+    try:
+        cid = uuid.UUID(str(conversation_id))
+        tid = uuid.UUID(str(task_id))
+    except Exception:
+        return
+    try:
+        with registry.SessionLocal() as session:
+            rows = (
+                session.query(ConversationEventORM)
+                .filter(
+                    ConversationEventORM.conversation_id == cid,
+                    ConversationEventORM.task_id == tid,
+                    ConversationEventORM.event_type == "tool_result",
+                )
+                .all()
+            )
+            tools: list[str] = []
+            for row in rows:
+                payload = row.payload or {}
+                tool = str(payload.get("tool") or "").strip()
+                if tool and tool not in tools:
+                    tools.append(tool)
+            if len(tools) < 2:
+                return
+            conversation = session.get(ConversationORM, cid)
+            if conversation is None:
+                return
+            settings = dict(conversation.settings or {})
+            if not bool(settings.get("auto_skill_curator", True)):
+                return
+            suggestions = settings.get("skill_suggestions", [])
+            if not isinstance(suggestions, list):
+                suggestions = []
+            key = "|".join(tools[:6])
+            now = int(time.time())
+            updated = False
+            for item in suggestions:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("key") == key:
+                    item["count"] = int(item.get("count") or 0) + 1
+                    item["last_seen"] = now
+                    item["last_prompt"] = prompt[:180]
+                    updated = True
+                    break
+            if not updated:
+                suggestions.insert(
+                    0,
+                    {
+                        "key": key,
+                        "tools": tools[:6],
+                        "count": 1,
+                        "last_seen": now,
+                        "last_prompt": prompt[:180],
+                    },
+                )
+            settings["skill_suggestions"] = suggestions[:30]
+            conversation.settings = settings
+            session.commit()
+    except Exception:
+        return
 
 
 def auto_sync_obsidian_notes(conversation_id: str, workspace_root: Path) -> None:
@@ -434,6 +763,8 @@ def run_task(task_id: str, prompt: Optional[str] = None):
     auto_context_compress = get_task_auto_context_compress(task_id)
     disabled_skills = get_task_disabled_skills(task_id)
     enable_vendor_skills = get_task_enable_vendor_skills(task_id)
+    pinned_skills = get_task_pinned_skills(task_id)
+    identity_notes = get_task_identity_notes(task_id)
     llm_connection = get_llm_connection()
     workspace_root = conversation_workspace(conversation_id)
     host_workspace_root = host_conversation_workspace(conversation_id)
@@ -450,7 +781,8 @@ def run_task(task_id: str, prompt: Optional[str] = None):
         auto_context_compress_token = current_auto_context_compress.set(
             auto_context_compress
         )
-        llm_connection_token = current_llm_connection.set(llm_connection)
+        selected_connection = resolve_llm_connection(llm_connection, wrapped)
+        llm_connection_token = current_llm_connection.set(selected_connection)
         if config.sandbox.use_sandbox:
             sandbox = await ConversationSandbox(
                 conversation_id=conversation_id,
@@ -463,6 +795,13 @@ def run_task(task_id: str, prompt: Optional[str] = None):
         os.chdir(workspace_root)
         token = current_task.set(wrapped)
         try:
+            sync_lmstudio_context_window(
+                conversation_id=conversation_id,
+                requested_context_window=requested_context_window,
+                llm_connection=selected_connection,
+                model=model,
+                task=wrapped,
+            )
             auto_sync_obsidian_notes(conversation_id, workspace_root)
             continuity = build_conversation_context(
                 task_id, conversation_id, workspace_root
@@ -471,14 +810,26 @@ def run_task(task_id: str, prompt: Optional[str] = None):
             agentmemory_context = build_agentmemory_context(
                 conversation_id, prompt or ""
             )
-            skill_context = format_skill_context(
-                select_skills(
-                    prompt or "",
+            identity_context = build_identity_context(identity_notes)
+            selected_skills = select_skills(
+                prompt or "",
+                workspace_root,
+                include_vendor=enable_vendor_skills,
+                disabled_skills=disabled_skills,
+            )
+            if pinned_skills:
+                pool = load_skills(
                     workspace_root,
                     include_vendor=enable_vendor_skills,
                     disabled_skills=disabled_skills,
                 )
-            )
+                names = {skill.name: skill for skill in pool}
+                ordered = [names[name] for name in pinned_skills if name in names]
+                for skill in selected_skills:
+                    if skill.name not in {item.name for item in ordered}:
+                        ordered.append(skill)
+                selected_skills = ordered
+            skill_context = format_skill_context(selected_skills)
             if sandbox is not None:
                 continuity = continuity.replace(
                     str(workspace_root), config.sandbox.work_dir
@@ -492,6 +843,7 @@ def run_task(task_id: str, prompt: Optional[str] = None):
                     continuity,
                     obsidian_context,
                     agentmemory_context,
+                    identity_context,
                     skill_context,
                 )
                 if part
@@ -523,9 +875,21 @@ def run_task(task_id: str, prompt: Optional[str] = None):
             os.chdir(previous_cwd)
 
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(_run())
+        task.status = "RUNNING"
+        registry.update_task(task)
+        wrapped.emit(
+            "agent_state", {"state": "run_started", "conversation_id": conversation_id}
+        )
+        if config.agentmemory.enabled and prompt:
+            agentmemory.remember(
+                conversation_id=conversation_id,
+                title="User request",
+                content=str(prompt),
+                metadata={"task_id": task_id, "status": "STARTED"},
+            )
+        result = asyncio.run(
+            asyncio.wait_for(_run(), timeout=max(30, TASK_HARD_TIMEOUT_SECONDS))
+        )
         task.status = "COMPLETED"
         workspace_summary = summarize_workspace(workspace_root)
         result_text = str(result or "").strip()
@@ -537,6 +901,7 @@ def run_task(task_id: str, prompt: Optional[str] = None):
                 content=completion_message,
                 metadata={"task_id": task_id, "status": "COMPLETED"},
             )
+        update_skill_suggestions(conversation_id, task_id, prompt or "")
         registry.update_task(
             task,
             result={
@@ -554,7 +919,37 @@ def run_task(task_id: str, prompt: Optional[str] = None):
                 "conversation_id": conversation_id,
             },
         )
+        wrapped.emit(
+            "agent_state",
+            {"state": "run_completed", "conversation_id": conversation_id},
+        )
         return {"status": "COMPLETED", "result": result}
+    except asyncio.TimeoutError:
+        detail = (
+            f"Task exceeded hard timeout ({max(30, TASK_HARD_TIMEOUT_SECONDS)}s) "
+            "and was terminated."
+        )
+        task.status = TaskStatus.FAILED
+        registry.update_task(task, result={"error": detail})
+        publish_event(
+            task_id,
+            "error",
+            {
+                "message": "Task failed",
+                "detail": detail,
+                "reason": detail,
+                "conversation_id": conversation_id,
+            },
+        )
+        wrapped.emit(
+            "agent_state",
+            {
+                "state": "run_failed",
+                "conversation_id": conversation_id,
+                "error": detail,
+            },
+        )
+        return {"status": "FAILED", "error": detail}
     except Exception as exc:
         task.status = TaskStatus.FAILED
         registry.update_task(task, result={"error": str(exc)})
@@ -568,9 +963,33 @@ def run_task(task_id: str, prompt: Optional[str] = None):
                 "conversation_id": conversation_id,
             },
         )
+        wrapped.emit(
+            "agent_state",
+            {
+                "state": "run_failed",
+                "conversation_id": conversation_id,
+                "error": str(exc),
+            },
+        )
         return {"status": "FAILED", "error": str(exc)}
     finally:
+        # Last-resort guard: never leave task non-terminal.
+        if str(task.status) in {"CREATED", "RUNNING"}:
+            detail = "Task ended unexpectedly without terminal status."
+            task.status = TaskStatus.FAILED
+            registry.update_task(task, result={"error": detail})
+            publish_event(
+                task_id,
+                "error",
+                {
+                    "message": "Task failed",
+                    "detail": detail,
+                    "reason": detail,
+                    "conversation_id": conversation_id,
+                },
+            )
+        # Ensure worker process does not keep a closed loop as current loop.
         try:
-            loop.close()
+            asyncio.set_event_loop(None)
         except Exception:
             pass

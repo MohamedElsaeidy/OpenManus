@@ -51,7 +51,40 @@ def get_disabled_tools() -> set[str]:
 
 def get_llm_connection() -> dict:
     settings = get_setting("llm_connection", {})
-    return settings if isinstance(settings, dict) else {}
+    if not isinstance(settings, dict):
+        return {}
+
+    cleaned = dict(settings)
+
+    def _is_masked(value: Any) -> bool:
+        return isinstance(value, str) and value.strip() == "********"
+
+    # Never pass redacted placeholders into runtime code paths.
+    for key in ("api_key", "base_url", "model", "api_type"):
+        if _is_masked(cleaned.get(key)):
+            cleaned.pop(key, None)
+
+    for key in ("max_tokens", "max_input_tokens"):
+        value = cleaned.get(key)
+        if _is_masked(value):
+            cleaned.pop(key, None)
+            continue
+        if isinstance(value, str):
+            try:
+                cleaned[key] = int(value)
+            except ValueError:
+                cleaned.pop(key, None)
+
+    temp = cleaned.get("temperature")
+    if _is_masked(temp):
+        cleaned.pop("temperature", None)
+    elif isinstance(temp, str):
+        try:
+            cleaned["temperature"] = float(temp)
+        except ValueError:
+            cleaned.pop("temperature", None)
+
+    return cleaned
 
 
 def get_config_overrides() -> dict:

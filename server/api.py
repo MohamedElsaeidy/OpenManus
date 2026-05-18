@@ -251,8 +251,57 @@ def _conversation_to_dict(session, conversation: ConversationORM) -> dict:
         if requested_context_window and requested_context_window > 0
         else None
     )
+    # Effective context window loaded for the current conversation model.
+    # Priority:
+    # 0) persisted LM Studio load result in conversation settings
+    # 1) admin llm_connection.max_input_tokens when model matches or no explicit model is set
+    # 2) configured model entry max_input_tokens
+    # 3) configured default max_input_tokens
+    received_context_window = None
+    try:
+        persisted_received = settings.get("received_context_window")
+        if persisted_received not in (None, ""):
+            received_context_window = int(persisted_received)
+
+        selected_model = str(conversation.model or "").strip() or None
+        connection = _get_app_setting(session, "llm_connection", {})
+        if isinstance(connection, dict):
+            conn_model = str(connection.get("model") or "").strip() or None
+            conn_window = connection.get("max_input_tokens")
+            if conn_window not in (None, "") and (
+                selected_model is None or selected_model == conn_model
+            ):
+                received_context_window = int(conn_window)
+
+        if (
+            received_context_window in (None, 0)
+            and selected_model
+            and isinstance(config.llm, dict)
+        ):
+            for llm_settings in config.llm.values():
+                if getattr(llm_settings, "model", None) == selected_model:
+                    value = getattr(llm_settings, "max_input_tokens", None)
+                    if value not in (None, 0):
+                        received_context_window = int(value)
+                        break
+
+        if received_context_window in (None, 0):
+            default_llm = (
+                config.llm.get("default") if isinstance(config.llm, dict) else None
+            )
+            value = (
+                getattr(default_llm, "max_input_tokens", None) if default_llm else None
+            )
+            if value not in (None, 0):
+                received_context_window = int(value)
+    except Exception:
+        received_context_window = None
+
     latest_context = {
         "requested_window": requested_context_window,
+        "received_window": received_context_window,
+        "received_window_source": settings.get("received_context_window_source")
+        or ("fallback_inferred" if received_context_window else None),
         "current_input_tokens": current_input,
         "usage_ratio": ratio,
         "is_near_limit": bool(ratio is not None and ratio >= 0.9),
@@ -401,6 +450,45 @@ def _agentmemory_health(conversation_id: Optional[str] = None) -> dict:
     return payload
 
 
+def _llm_connection_health(session) -> dict:
+    connection = _effective_llm_connection(session)
+    payload = {
+        "configured": bool(connection),
+        "live": False,
+        "reason": "Not configured",
+        "api_type": str(connection.get("api_type") or ""),
+        "base_url": str(connection.get("base_url") or ""),
+    }
+    base_url = str(connection.get("base_url") or "").strip()
+    if not base_url:
+        return payload
+    api_type = str(connection.get("api_type") or "").strip().lower()
+    token = str(connection.get("api_key") or "").strip() or None
+    try:
+        if api_type in {"lmstudio", "local"}:
+            native = _lmstudio_native_base(base_url)
+            if not native:
+                payload["reason"] = "Invalid LM Studio URL"
+                return payload
+            data = _http_json("GET", f"{native}/models", token=token)
+        else:
+            models_url = (
+                base_url.rstrip("/") + "/models"
+                if base_url.rstrip("/").endswith("/v1")
+                else base_url.rstrip("/") + "/v1/models"
+            )
+            data = _http_json("GET", models_url, token=token)
+        rows = _extract_model_rows(data)
+        payload["live"] = True
+        payload["reason"] = f"OK ({len(rows)} models)"
+        payload["model_count"] = len(rows)
+        return payload
+    except Exception as exc:
+        payload["live"] = False
+        payload["reason"] = str(exc)
+        return payload
+
+
 def _prune_orphan_conversation_sandboxes(session) -> int:
     """Remove sandbox containers whose conversation row no longer exists."""
     try:
@@ -456,14 +544,22 @@ def _set_app_setting(session, key: str, value: Any) -> None:
 
 
 def _redact_config(value: Any) -> Any:
+    secret_key_names = {
+        "api_key",
+        "apikey",
+        "password",
+        "secret",
+        "access_token",
+        "refresh_token",
+        "bearer_token",
+        "authorization",
+        "auth_token",
+    }
     if isinstance(value, dict):
         redacted = {}
         for key, item in value.items():
             lowered = str(key).lower()
-            if any(
-                secret in lowered
-                for secret in ("api_key", "password", "token", "secret")
-            ):
+            if lowered in secret_key_names or lowered.endswith("_api_key"):
                 redacted[key] = "********" if item else item
             else:
                 redacted[key] = _redact_config(item)
@@ -529,6 +625,67 @@ def _http_json(
         if not data:
             return {}
         return json.loads(data.decode("utf-8"))
+
+
+def _extract_model_rows(payload: Any) -> list[dict]:
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if not isinstance(payload, dict):
+        return []
+    data_rows = payload.get("data")
+    if isinstance(data_rows, list):
+        return [item for item in data_rows if isinstance(item, dict)]
+    model_rows = payload.get("models")
+    if isinstance(model_rows, list):
+        return [item for item in model_rows if isinstance(item, dict)]
+    return []
+
+
+def _model_id_from_row(item: dict) -> str:
+    return str(
+        item.get("id")
+        or item.get("key")
+        or item.get("model")
+        or item.get("name")
+        or item.get("instance_id")
+        or ""
+    ).strip()
+
+
+def _model_instance_id_from_row(item: dict) -> str:
+    loaded_instances = item.get("loaded_instances")
+    if isinstance(loaded_instances, list) and loaded_instances:
+        first = loaded_instances[0]
+        if isinstance(first, dict):
+            instance_id = str(first.get("id") or "").strip()
+            if instance_id:
+                return instance_id
+    return str(item.get("instance_id") or "").strip()
+
+
+def _model_state_from_row(item: dict) -> str:
+    state = str(item.get("state") or "").strip().lower()
+    if state:
+        return state
+    loaded_instances = item.get("loaded_instances")
+    if isinstance(loaded_instances, list):
+        return "loaded" if len(loaded_instances) > 0 else "not-loaded"
+    return ""
+
+
+def _model_variant_tag_from_row(item: dict) -> str:
+    quant = item.get("quantization")
+    if isinstance(quant, dict):
+        name = str(quant.get("name") or "").strip()
+        if name:
+            return name
+    params = str(item.get("params_string") or "").strip()
+    if params:
+        return params
+    fmt = str(item.get("format") or "").strip()
+    if fmt:
+        return fmt
+    return ""
 
 
 def _require_conversation(
@@ -646,43 +803,70 @@ def _agent_event_to_progress(event: dict) -> list[dict]:
     if agent_type == "thought":
         tools = data.get("tools", [])
         tool_calls = data.get("tool_calls", [])
-        first_call = tool_calls[0] if tool_calls else {}
-        first_function = first_call.get("function", {})
-        first_id = first_call.get("id") or (tools[0] if tools else None)
-        first_name = first_function.get("name") or (tools[0] if tools else None)
-        first_arguments = first_function.get("arguments") or data.get("arguments")
         msgs = [
             _msg(
                 "agent:lifecycle:step:think:tool:selected",
                 {
-                    "tool": first_name,
+                    "tool": (
+                        (tool_calls[0].get("function", {}) or {}).get("name")
+                        if tool_calls
+                        else (tools[0] if tools else None)
+                    ),
                     "tool_calls": tool_calls,
                     "content": data.get("content", ""),
                 },
             )
         ]
         msgs.append(_msg("agent:lifecycle:step:think:complete", data))
-        if tools:
+        if tools or tool_calls:
             msgs.append(_msg("agent:lifecycle:step:act:start", data))
-            msgs.append(
-                _msg(
-                    "agent:lifecycle:step:act:tool:start",
-                    {
-                        "id": first_id,
-                        "name": first_name,
-                    },
+            if tool_calls:
+                for call in tool_calls:
+                    fn = call.get("function", {}) or {}
+                    call_id = call.get("id") or fn.get("name")
+                    call_name = fn.get("name")
+                    call_args = fn.get("arguments")
+                    msgs.append(
+                        _msg(
+                            "agent:lifecycle:step:act:tool:start",
+                            {
+                                "id": call_id,
+                                "name": call_name,
+                            },
+                        )
+                    )
+                    msgs.append(
+                        _msg(
+                            "agent:lifecycle:step:act:tool:execute:start",
+                            {
+                                "id": call_id,
+                                "name": call_name,
+                                "arguments": call_args,
+                            },
+                        )
+                    )
+            else:
+                first_id = tools[0] if tools else None
+                first_name = tools[0] if tools else None
+                msgs.append(
+                    _msg(
+                        "agent:lifecycle:step:act:tool:start",
+                        {
+                            "id": first_id,
+                            "name": first_name,
+                        },
+                    )
                 )
-            )
-            msgs.append(
-                _msg(
-                    "agent:lifecycle:step:act:tool:execute:start",
-                    {
-                        "id": first_id,
-                        "name": first_name,
-                        "arguments": first_arguments,
-                    },
+                msgs.append(
+                    _msg(
+                        "agent:lifecycle:step:act:tool:execute:start",
+                        {
+                            "id": first_id,
+                            "name": first_name,
+                            "arguments": data.get("arguments"),
+                        },
+                    )
                 )
-            )
         return msgs
 
     if agent_type == "tool_result":
@@ -749,19 +933,21 @@ def _agent_event_to_progress(event: dict) -> list[dict]:
         return [_msg("agent:lifecycle:state:change", data)]
 
     if agent_type == "error":
-        return [
-            _msg("agent:lifecycle:step:error", data),
-            _msg(
-                "agent:lifecycle:terminated",
-                {
-                    **data,
-                    "reason": data.get("detail")
-                    or data.get("message")
-                    or "Task failed",
-                    "status": "failure",
-                },
-            ),
-        ]
+        msgs = [_msg("agent:lifecycle:step:error", data)]
+        if data.get("fatal", True):
+            msgs.append(
+                _msg(
+                    "agent:lifecycle:terminated",
+                    {
+                        **data,
+                        "reason": data.get("detail")
+                        or data.get("message")
+                        or "Task failed",
+                        "status": "failure",
+                    },
+                )
+            )
+        return msgs
 
     # Catch-all: pass through as a generic step event
     return [_msg(f"agent:lifecycle:{agent_type}", data)]
@@ -777,6 +963,8 @@ def _task_input(
     auto_context_compress: Optional[bool] = None,
     disabled_skills: Optional[list[str]] = None,
     enable_vendor_skills: Optional[bool] = None,
+    pinned_skills: Optional[list[str]] = None,
+    identity_notes: Optional[str] = None,
 ) -> dict:
     data = {"conversation_id": conversation_id}
     if prompt:
@@ -797,6 +985,12 @@ def _task_input(
         ]
     if enable_vendor_skills is not None:
         data["enable_vendor_skills"] = bool(enable_vendor_skills)
+    if pinned_skills:
+        data["pinned_skills"] = [
+            str(name).strip() for name in pinned_skills if str(name).strip()
+        ]
+    if identity_notes:
+        data["identity_notes"] = str(identity_notes).strip()
     return data
 
 
@@ -887,10 +1081,17 @@ async def me(request: Request):
 async def list_models(request: Request):
     _require_user(request)
     with registry.SessionLocal() as session:
-        connection = _get_app_setting(session, "llm_connection", {})
+        connection = _effective_llm_connection(session)
 
     configured = [
-        {"id": settings.model, "name": name, "api_type": settings.api_type}
+        {
+            "id": settings.model,
+            "name": name,
+            "api_type": settings.api_type,
+            "base_model": settings.model,
+            "variant_tag": "",
+            "raw_model_key": settings.model,
+        }
         for name, settings in config.llm.items()
         if settings.model
     ]
@@ -901,9 +1102,53 @@ async def list_models(request: Request):
                 "id": connection["model"],
                 "name": "admin",
                 "api_type": connection.get("api_type", "openai"),
+                "base_model": connection["model"],
+                "variant_tag": "",
+                "raw_model_key": connection["model"],
             },
         )
     models = configured
+
+    # Enrich with live LM Studio model variants when connected.
+    try:
+        base_url = str(connection.get("base_url") or "")
+        api_type = str(connection.get("api_type") or "").lower()
+        api_key = str(connection.get("api_key") or "")
+        native_base = _lmstudio_native_base(base_url)
+        if native_base and (
+            api_type in {"openai", "lmstudio", "local"}
+            or "1234" in base_url
+            or "lmstudio" in base_url.lower()
+        ):
+            listing = _http_json("GET", f"{native_base}/models", token=api_key or None)
+            lm_models = listing.get("data") if isinstance(listing, dict) else []
+            if isinstance(lm_models, list):
+                for item in lm_models:
+                    if not isinstance(item, dict):
+                        continue
+                    model_id = _model_id_from_row(item)
+                    if not model_id:
+                        continue
+                    models.insert(
+                        0,
+                        {
+                            "id": model_id,
+                            "name": item.get("display_name")
+                            or item.get("path")
+                            or item.get("name")
+                            or "lmstudio",
+                            "api_type": "lmstudio",
+                            "state": _model_state_from_row(item),
+                            "instance_id": _model_instance_id_from_row(item),
+                            "base_model": str(item.get("key") or model_id),
+                            "variant_tag": _model_variant_tag_from_row(item),
+                            "raw_model_key": str(item.get("key") or model_id),
+                        },
+                    )
+    except Exception:
+        # Keep model listing resilient if LM Studio native API is unavailable.
+        pass
+
     seen = set()
     unique_models = []
     for model in models:
@@ -912,6 +1157,194 @@ async def list_models(request: Request):
         seen.add(model["id"])
         unique_models.append(model)
     return {"models": unique_models}
+
+
+@app.post("/api/models/query")
+async def query_models(request: Request):
+    _require_user(request)
+    body = (
+        await request.json()
+        if request.headers.get("content-type", "").startswith("application/json")
+        else {}
+    )
+    host = str((body or {}).get("host") or "").strip()
+    api_key = str((body or {}).get("api_key") or "").strip() or None
+    style = str((body or {}).get("style") or "custom").strip().lower()
+    models_path = str((body or {}).get("models_path") or "").strip()
+
+    if not host:
+        raise HTTPException(status_code=400, detail="Host is required")
+
+    models: list[dict] = []
+    url = ""
+    try:
+        if style == "lm-studio":
+            native = _lmstudio_native_base(host)
+            if not native:
+                raise HTTPException(
+                    status_code=400, detail="Invalid LM Studio host URL"
+                )
+            url = f"{native}/models"
+            data = _http_json("GET", url, token=api_key, timeout=8)
+            rows = _extract_model_rows(data)
+            for item in rows:
+                if not isinstance(item, dict):
+                    continue
+                model_id = _model_id_from_row(item)
+                if not model_id:
+                    continue
+                models.append(
+                    {
+                        "id": model_id,
+                        "name": item.get("display_name")
+                        or item.get("path")
+                        or item.get("name")
+                        or model_id,
+                        "api_type": "lmstudio",
+                        "state": _model_state_from_row(item),
+                        "instance_id": _model_instance_id_from_row(item),
+                        "base_model": str(item.get("key") or model_id),
+                        "variant_tag": _model_variant_tag_from_row(item),
+                        "raw_model_key": str(item.get("key") or model_id),
+                    }
+                )
+        elif style == "ollama":
+            # Prefer OpenAI-compatible endpoint, fallback to Ollama native tags endpoint.
+            url = host.rstrip("/") + "/v1/models"
+            try:
+                data = _http_json("GET", url, token=api_key, timeout=8)
+                rows = _extract_model_rows(data)
+                for item in rows:
+                    if not isinstance(item, dict):
+                        continue
+                    model_id = _model_id_from_row(item)
+                    if model_id:
+                        models.append(
+                            {
+                                "id": model_id,
+                                "name": model_id,
+                                "api_type": "ollama",
+                                "base_model": model_id,
+                                "variant_tag": "",
+                                "raw_model_key": model_id,
+                            }
+                        )
+            except Exception:
+                url = host.rstrip("/") + "/api/tags"
+                data = _http_json("GET", url, token=api_key, timeout=8)
+                rows = _extract_model_rows(data)
+                for item in rows:
+                    if not isinstance(item, dict):
+                        continue
+                    model_id = _model_id_from_row(item)
+                    if model_id:
+                        models.append(
+                            {
+                                "id": model_id,
+                                "name": model_id,
+                                "api_type": "ollama",
+                                "base_model": model_id,
+                                "variant_tag": "",
+                                "raw_model_key": model_id,
+                            }
+                        )
+        else:
+            if style == "openai":
+                suffix = "/v1/models"
+            else:
+                suffix = models_path or "/v1/models"
+                if not suffix.startswith("/"):
+                    suffix = "/" + suffix
+            url = host.rstrip("/") + suffix
+            data = _http_json("GET", url, token=api_key, timeout=8)
+            rows = _extract_model_rows(data)
+            for item in rows:
+                if not isinstance(item, dict):
+                    continue
+                model_id = _model_id_from_row(item)
+                if model_id:
+                    models.append(
+                        {
+                            "id": model_id,
+                            "name": model_id,
+                            "api_type": style or "custom",
+                            "base_model": model_id,
+                            "variant_tag": "",
+                            "raw_model_key": model_id,
+                        }
+                    )
+
+        seen: set[str] = set()
+        unique_models: list[dict] = []
+        for model in models:
+            model_id = str(model.get("id") or "")
+            if not model_id or model_id in seen:
+                continue
+            seen.add(model_id)
+            unique_models.append(model)
+        return {"models": unique_models, "url": url}
+    except HTTPException:
+        raise
+    except urlerror.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        raise HTTPException(status_code=exc.code, detail=detail or f"HTTP {exc.code}")
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Model query failed: {exc}")
+
+
+@app.post("/api/models/load")
+async def load_model(request: Request):
+    _require_user(request)
+    body = (
+        await request.json()
+        if request.headers.get("content-type", "").startswith("application/json")
+        else {}
+    )
+    host = str((body or {}).get("host") or "").strip()
+    api_key = str((body or {}).get("api_key") or "").strip() or None
+    style = str((body or {}).get("style") or "custom").strip().lower()
+    model = str((body or {}).get("model") or "").strip()
+    context_length_raw = (body or {}).get("context_length")
+
+    if not host:
+        raise HTTPException(status_code=400, detail="Host is required")
+    if not model:
+        raise HTTPException(status_code=400, detail="Model is required")
+    if style != "lm-studio":
+        raise HTTPException(
+            status_code=400,
+            detail="Load model is currently supported for LM Studio profiles only",
+        )
+
+    native = _lmstudio_native_base(host)
+    if not native:
+        raise HTTPException(status_code=400, detail="Invalid LM Studio host URL")
+
+    payload: dict[str, Any] = {"model": model, "echo_load_config": True}
+    if context_length_raw not in (None, ""):
+        try:
+            context_length = int(context_length_raw)
+            if context_length > 0:
+                payload["context_length"] = context_length
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400, detail="context_length must be a positive integer"
+            )
+
+    try:
+        data = _http_json(
+            "POST",
+            f"{native}/models/load",
+            payload=payload,
+            token=api_key,
+            timeout=30,
+        )
+        return {"ok": True, "result": data}
+    except urlerror.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        raise HTTPException(status_code=exc.code, detail=detail or f"HTTP {exc.code}")
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Load model failed: {exc}")
 
 
 @app.post("/api/models/eject")
@@ -995,12 +1428,69 @@ async def eject_model(request: Request):
     except HTTPException:
         raise
     except urlerror.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="ignore")
+        detail_raw = exc.read().decode("utf-8", errors="ignore")
+        # Idempotent behavior: unloading an already-unloaded model should not fail UX.
+        try:
+            parsed = json.loads(detail_raw) if detail_raw else {}
+            err = parsed.get("error") if isinstance(parsed, dict) else None
+            err_type = str((err or {}).get("type") or "")
+            if err_type == "model_not_found":
+                return {
+                    "ok": True,
+                    "requested_model": requested_model or "",
+                    "instance_id": requested_model or "",
+                    "already_unloaded": True,
+                }
+        except Exception:
+            pass
         raise HTTPException(
-            status_code=exc.code, detail=detail or "LM Studio eject failed"
+            status_code=exc.code, detail=detail_raw or "LM Studio eject failed"
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"LM Studio eject failed: {exc}")
+
+
+@app.post("/api/connection/verify")
+@app.post("/connection/verify")
+async def verify_connection(request: Request):
+    _require_user(request)
+    body = (
+        await request.json()
+        if request.headers.get("content-type", "").startswith("application/json")
+        else {}
+    )
+    host = str((body or {}).get("host") or "").strip()
+    api_key = str((body or {}).get("api_key") or "").strip() or None
+    style = str((body or {}).get("style") or "custom").strip().lower()
+    models_path = str((body or {}).get("models_path") or "").strip()
+
+    if not host:
+        raise HTTPException(status_code=400, detail="Host is required")
+
+    # Build URL from host + style/path
+    if style == "lm-studio":
+        native = _lmstudio_native_base(host)
+        if not native:
+            raise HTTPException(status_code=400, detail="Invalid LM Studio host URL")
+        url = f"{native}/models"
+    elif style in {"openai", "ollama"}:
+        suffix = "/v1/models"
+        url = host.rstrip("/") + suffix
+    else:
+        suffix = models_path or "/v1/models"
+        if not suffix.startswith("/"):
+            suffix = "/" + suffix
+        url = host.rstrip("/") + suffix
+
+    try:
+        data = _http_json("GET", url, token=api_key, timeout=8)
+        count = len(_extract_model_rows(data))
+        return {"ok": True, "url": url, "models_count": count}
+    except urlerror.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        raise HTTPException(status_code=exc.code, detail=detail or f"HTTP {exc.code}")
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Connection verify failed: {exc}")
 
 
 @app.get("/api/tools")
@@ -1174,6 +1664,41 @@ def _event_row_to_progress(
     return output
 
 
+def _truncate_text(value: str, limit: int = 8000) -> str:
+    if len(value) <= limit:
+        return value
+    return value[:limit] + f"\n...[truncated {len(value) - limit} chars]"
+
+
+def _compact_history_value(value, *, text_limit: int = 8000):
+    """Compact oversized event payloads for history endpoint stability."""
+    if isinstance(value, str):
+        return _truncate_text(value, text_limit)
+    if isinstance(value, list):
+        return [
+            _compact_history_value(item, text_limit=text_limit) for item in value[:200]
+        ]
+    if isinstance(value, dict):
+        compacted = {}
+        for key, item in value.items():
+            key_s = str(key)
+            # Avoid shipping giant inline screenshots in history payloads.
+            if key_s in {"screenshot", "base64_image", "image"} and isinstance(
+                item, str
+            ):
+                compacted[key_s] = f"[omitted base64 payload: {len(item)} chars]"
+                continue
+            compacted[key_s] = _compact_history_value(item, text_limit=text_limit)
+        return compacted
+    return value
+
+
+def _compact_history_event(event: dict) -> dict:
+    compacted = dict(event)
+    compacted["content"] = _compact_history_value(event.get("content") or {})
+    return compacted
+
+
 @app.get("/api/admin/settings")
 async def get_admin_settings(request: Request):
     _require_admin(request)
@@ -1205,9 +1730,17 @@ async def update_admin_settings(request: Request):
                     "api_type",
                     "max_tokens",
                     "temperature",
+                    "fallback_chain",
                 ]
                 if body["llm_connection"].get(key) not in (None, "")
             }
+            if "fallback_chain" in allowed and not isinstance(
+                allowed["fallback_chain"], list
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="llm_connection.fallback_chain must be a list of connection objects",
+                )
             _set_app_setting(session, "llm_connection", allowed)
         if "tools" in body:
             disabled = [
@@ -1306,7 +1839,7 @@ async def get_conversation_tasks(request: Request, conversation_id: str):
 async def get_conversation_event_history(
     request: Request,
     conversation_id: str,
-    limit: int = 500,
+    limit: int = 160,
     before_event_id: Optional[int] = None,
     kind: Optional[str] = None,
 ):
@@ -1316,22 +1849,44 @@ async def get_conversation_event_history(
         tasks = _conversation_tasks(
             session, str(conversation.conversation_id), ascending=True
         )
+        # Recover stale non-terminal tasks during history load so UI does not
+        # keep trying to tail a dead SSE stream forever.
+        now = _now()
+        stale_seconds = 300
+        for task in tasks:
+            # Only recover stale CREATED tasks here.
+            # RUNNING tasks may legitimately execute for a long time.
+            if str(task.status) != "CREATED":
+                continue
+            created_at = task.created_at or now
+            age = (now - created_at).total_seconds()
+            if age <= stale_seconds:
+                continue
+            task.status = "FAILED"
+            task.result = {
+                "error": "Stale task recovered while loading conversation history."
+            }
+            session.commit()
+        tasks = _conversation_tasks(
+            session, str(conversation.conversation_id), ascending=True
+        )
         conversation_payload = _conversation_to_dict(session, conversation)
         task_payloads = [_task_to_dict(task) for task in tasks]
         task_by_id = {str(task.task_id): task for task in tasks}
 
-        query = (
-            session.query(ConversationEventORM)
-            .filter(
-                ConversationEventORM.conversation_id == conversation.conversation_id
-            )
-            .order_by(ConversationEventORM.event_id.asc())
+        query = session.query(ConversationEventORM).filter(
+            ConversationEventORM.conversation_id == conversation.conversation_id
         )
         if before_event_id is not None:
             query = query.filter(ConversationEventORM.event_id < before_event_id)
         if kind:
             query = query.filter(ConversationEventORM.event_type == kind)
-        rows = query.limit(max(1, min(limit, 2000))).all()
+        page_size = max(1, min(limit, 2000))
+        # Load the newest page first for responsive conversation open.
+        rows = (
+            query.order_by(ConversationEventORM.event_id.desc()).limit(page_size).all()
+        )
+        rows = list(reversed(rows))
 
     events: list[dict] = []
     if rows:
@@ -1344,15 +1899,26 @@ async def get_conversation_event_history(
                     continue
                 if is_complete and task_key:
                     has_emitted_complete_by_task.add(task_key)
-                events.append(event)
+                events.append(_compact_history_event(event))
     else:
         for task in tasks:
-            events.extend(await _task_stream_progress(task))
+            events.extend(
+                [
+                    _compact_history_event(item)
+                    for item in await _task_stream_progress(task)
+                ]
+            )
 
+    next_before_event_id = rows[0].event_id if rows else None
     return {
         "conversation": conversation_payload,
         "tasks": task_payloads,
         "events": events,
+        "pagination": {
+            "limit": page_size,
+            "next_before_event_id": next_before_event_id,
+            "has_more": len(rows) == page_size and next_before_event_id is not None,
+        },
     }
 
 
@@ -1512,14 +2078,34 @@ async def get_conversation_runtime(request: Request, conversation_id: str):
 
     sandbox = _conversation_sandbox(conversation_id)
     try:
-        sandbox_status, processes, containers, urls = await asyncio.gather(
-            sandbox.status(),
+        sandbox_status = await sandbox.status()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    status_value = str((sandbox_status or {}).get("status") or "").lower()
+    # Do not hard-fail runtime view when sandbox is paused/stopped/missing.
+    # In these states process/container inspection may fail by design.
+    if status_value in {"paused", "exited", "dead", "missing", ""}:
+        return {
+            "conversation_id": conversation_id,
+            "sandbox": sandbox_status,
+            "status": "paused" if status_value == "paused" else "idle",
+            "processes": [],
+            "containers": [],
+            "urls": [],
+            "hidden_system_containers": 0,
+            "running_count": 0,
+        }
+
+    try:
+        processes, containers, urls = await asyncio.gather(
             sandbox.list_processes(),
             sandbox.list_docker_containers(),
             sandbox.list_exposed_urls(),
         )
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+    except Exception:
+        # Runtime panel should stay available even when deep inspection fails.
+        processes, containers, urls = [], [], []
 
     killable_processes = [
         item
@@ -1564,6 +2150,7 @@ async def get_conversation_integrations_health(request: Request, conversation_id
             "conversation_id": conversation_id,
             "agentmemory": _agentmemory_health(conversation_id),
             "obsidian": _obsidian_health(session, conversation_id),
+            "llm_connection": _llm_connection_health(session),
         }
 
 
@@ -1691,6 +2278,16 @@ async def update_conversation_settings(request: Request, conversation_id: str):
             ]
         if "enable_vendor_skills" in body:
             settings["enable_vendor_skills"] = bool(body.get("enable_vendor_skills"))
+        if "pinned_skills" in body:
+            settings["pinned_skills"] = [
+                str(name).strip()
+                for name in body.get("pinned_skills", [])
+                if str(name).strip()
+            ]
+        if "identity_notes" in body:
+            settings["identity_notes"] = str(body.get("identity_notes") or "").strip()
+        if "auto_skill_curator" in body:
+            settings["auto_skill_curator"] = bool(body.get("auto_skill_curator"))
         conversation.settings = settings
         conversation.updated_at = _now()
         session.commit()
@@ -1716,6 +2313,14 @@ async def delete_conversation(request: Request, conversation_id: str):
         task_ids = [str(task.task_id) for task in tasks]
         session.query(ConversationEventORM).filter(
             ConversationEventORM.conversation_id == conversation.conversation_id
+        ).delete(synchronize_session=False)
+        # Remove Obsidian graph rows before deleting the conversation row
+        # to satisfy foreign key constraints.
+        session.query(ObsidianEdgeORM).filter(
+            ObsidianEdgeORM.conversation_id == conversation.conversation_id
+        ).delete(synchronize_session=False)
+        session.query(ObsidianNoteORM).filter(
+            ObsidianNoteORM.conversation_id == conversation.conversation_id
         ).delete(synchronize_session=False)
         for task in tasks:
             session.delete(task)
@@ -1978,6 +2583,12 @@ async def create_task(
                 enable_vendor_skills = bool(
                     (conversation_settings or {}).get("enable_vendor_skills", True)
                 )
+                pinned_skills = list(
+                    (conversation_settings or {}).get("pinned_skills", [])
+                )
+                identity_notes = str(
+                    (conversation_settings or {}).get("identity_notes", "")
+                )
                 if conversation is not None:
                     conversation.updated_at = _now()
                     session.commit()
@@ -1993,6 +2604,8 @@ async def create_task(
                         auto_context_compress=auto_context_compress,
                         disabled_skills=disabled_skills,
                         enable_vendor_skills=enable_vendor_skills,
+                        pinned_skills=pinned_skills,
+                        identity_notes=identity_notes,
                     )
                 )
                 task.status = TaskStatus.CREATED
@@ -2007,6 +2620,52 @@ async def create_task(
                         "conversation_id": conversation_id,
                     },
                 }
+
+            # Recovery path: if a task stayed non-terminal for too long
+            # (typically after worker restart/crash), mark it failed so the
+            # conversation can continue with a fresh run.
+            age_seconds = (_now() - (existing_orm.updated_at or _now())).total_seconds()
+            if existing_orm.status == "CREATED" and age_seconds > 300:
+                with registry.SessionLocal() as session:
+                    stale = session.get(TaskORM, existing_orm.task_id)
+                    if stale is not None and stale.status == "CREATED":
+                        stale.status = "FAILED"
+                        stale.result = {
+                            "error": "Stale task recovered after worker interruption."
+                        }
+                        session.commit()
+                # Re-read latest state after recovery mark.
+                with registry.SessionLocal() as session:
+                    refreshed = session.get(TaskORM, existing_orm.task_id)
+                    if refreshed is not None and refreshed.status in TERMINAL_STATUSES:
+                        existing_orm = refreshed
+                        task = registry.create_task(
+                            input=_task_input(
+                                prompt,
+                                conversation_id,
+                                parent_task_id=task_id,
+                                model=run_model,
+                                disabled_tools=disabled_tools,
+                                requested_context_window=requested_context_window,
+                                auto_context_compress=auto_context_compress,
+                                disabled_skills=disabled_skills,
+                                enable_vendor_skills=enable_vendor_skills,
+                                pinned_skills=pinned_skills,
+                                identity_notes=identity_notes,
+                            )
+                        )
+                        task.status = TaskStatus.CREATED
+                        run_task.apply_async(args=[task.id, prompt], task_id=task.id)
+                        return {
+                            "task_id": task.id,
+                            "status": str(task.status),
+                            "conversation_id": conversation_id,
+                            "data": {
+                                "task_id": task.id,
+                                "status": str(task.status),
+                                "conversation_id": conversation_id,
+                            },
+                        }
 
             # Task exists but is NOT in a terminal status.
             # We must not queue another Celery task for the exact same task ID,
@@ -2043,6 +2702,8 @@ async def create_task(
         enable_vendor_skills = bool(
             (conversation.settings or {}).get("enable_vendor_skills", True)
         )
+        pinned_skills = list((conversation.settings or {}).get("pinned_skills", []))
+        identity_notes = str((conversation.settings or {}).get("identity_notes", ""))
         conversation.updated_at = _now()
         session.commit()
         conversation_id = str(conversation.conversation_id)
@@ -2058,6 +2719,8 @@ async def create_task(
             auto_context_compress=auto_context_compress,
             disabled_skills=disabled_skills,
             enable_vendor_skills=enable_vendor_skills,
+            pinned_skills=pinned_skills,
+            identity_notes=identity_notes,
         ),
     )
     task.status = TaskStatus.CREATED
@@ -2138,6 +2801,16 @@ async def send_conversation_message(request: Request, conversation_id: str):
             None,
         )
         if active_task is not None:
+            age_seconds = (_now() - (active_task.updated_at or _now())).total_seconds()
+            if active_task.status == "CREATED" and age_seconds > 300:
+                active_task.status = "FAILED"
+                active_task.result = {
+                    "error": "Stale task recovered after worker interruption."
+                }
+                session.commit()
+                active_task = None
+
+        if active_task is not None:
             active_task_id = str(active_task.task_id)
         else:
             active_task_id = None
@@ -2158,6 +2831,10 @@ async def send_conversation_message(request: Request, conversation_id: str):
             )
             enable_vendor_skills = bool(
                 (conversation.settings or {}).get("enable_vendor_skills", True)
+            )
+            pinned_skills = list((conversation.settings or {}).get("pinned_skills", []))
+            identity_notes = str(
+                (conversation.settings or {}).get("identity_notes", "")
             )
             conversation.updated_at = _now()
             session.commit()
@@ -2185,6 +2862,8 @@ async def send_conversation_message(request: Request, conversation_id: str):
             auto_context_compress=auto_context_compress,
             disabled_skills=disabled_skills,
             enable_vendor_skills=enable_vendor_skills,
+            pinned_skills=pinned_skills,
+            identity_notes=identity_notes,
         )
     )
     task.status = TaskStatus.CREATED

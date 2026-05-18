@@ -142,10 +142,34 @@ def select_skills(
         include_vendor=include_vendor,
         disabled_skills=disabled_skills,
     )
-    always = [skill for skill in skills if skill.type == "repo" or not skill.triggers]
+    prompt_text = (prompt or "").lower()
+    prompt_tokens = {
+        token
+        for token in "".join(ch if ch.isalnum() else " " for ch in prompt_text).split()
+        if len(token) >= 3
+    }
+
     matched = [skill for skill in skills if skill.triggers and skill.matches(prompt)]
+
+    # Fallback relevance for trigger-less/vendor skills: only include when the
+    # prompt text overlaps with skill name/path keywords.
+    ranked_fallback: list[tuple[int, Skill]] = []
+    for skill in skills:
+        if skill in matched:
+            continue
+        label = f"{skill.name} {Path(skill.path).stem}".lower()
+        skill_tokens = {
+            token
+            for token in "".join(ch if ch.isalnum() else " " for ch in label).split()
+            if len(token) >= 3
+        }
+        overlap = prompt_tokens & skill_tokens
+        if overlap:
+            ranked_fallback.append((len(overlap), skill))
+    ranked_fallback.sort(key=lambda item: item[0], reverse=True)
+
     selected: list[Skill] = []
-    for skill in [*always, *matched]:
+    for skill in [*matched, *[item[1] for item in ranked_fallback]]:
         if skill.name in {item.name for item in selected}:
             continue
         selected.append(skill)

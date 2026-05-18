@@ -1,4 +1,8 @@
 import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 import {
   getConversation,
   getIntegrationsHealth,
@@ -11,7 +15,7 @@ import {
 import { listModels, type ModelOption } from '@/services/models';
 import { listTools } from '@/services/tools';
 import type { ToolOption } from '@/services/admin';
-import { RefreshCcw, Save } from 'lucide-react';
+import { BrainCircuit, RefreshCcw, Save, Wrench } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -26,6 +30,9 @@ export default function ConversationSettingsPage() {
   const [disabledTools, setDisabledTools] = useState<string[]>([]);
   const [disabledSkills, setDisabledSkills] = useState<string[]>([]);
   const [enableVendorSkills, setEnableVendorSkills] = useState(true);
+  const [pinnedSkills, setPinnedSkills] = useState<string[]>([]);
+  const [identityNotes, setIdentityNotes] = useState('');
+  const [autoSkillCurator, setAutoSkillCurator] = useState(true);
   const [health, setHealth] = useState<IntegrationsHealth | null>(null);
   const [isHealthLoading, setIsHealthLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -57,6 +64,9 @@ export default function ConversationSettingsPage() {
         setDisabledTools(loadedConversation.settings?.disabled_tools || []);
         setDisabledSkills(loadedConversation.settings?.disabled_skills || []);
         setEnableVendorSkills(loadedConversation.settings?.enable_vendor_skills ?? true);
+        setPinnedSkills(loadedConversation.settings?.pinned_skills || []);
+        setIdentityNotes(loadedConversation.settings?.identity_notes || '');
+        setAutoSkillCurator(loadedConversation.settings?.auto_skill_curator ?? true);
       })
       .catch(error => toast.error(error instanceof Error ? error.message : 'Could not load settings'));
   }, [conversationId]);
@@ -83,11 +93,19 @@ export default function ConversationSettingsPage() {
   };
 
   const disabledSkillSet = new Set(disabledSkills);
+  const pinnedSkillSet = new Set(pinnedSkills);
   const toggleSkill = (name: string) => {
     const next = new Set(disabledSkillSet);
     if (next.has(name)) next.delete(name);
     else next.add(name);
     setDisabledSkills([...next]);
+  };
+
+  const togglePinnedSkill = (name: string) => {
+    const next = new Set(pinnedSkillSet);
+    if (next.has(name)) next.delete(name);
+    else next.add(name);
+    setPinnedSkills([...next]);
   };
 
   const save = async () => {
@@ -98,6 +116,9 @@ export default function ConversationSettingsPage() {
         disabled_tools: disabledTools,
         disabled_skills: disabledSkills,
         enable_vendor_skills: enableVendorSkills,
+        pinned_skills: pinnedSkills,
+        identity_notes: identityNotes,
+        auto_skill_curator: autoSkillCurator,
       });
       setConversation(saved);
       toast.success('Conversation settings saved');
@@ -110,11 +131,11 @@ export default function ConversationSettingsPage() {
 
   return (
     <div className="h-full overflow-y-auto p-6">
-      <div className="mx-auto max-w-4xl space-y-8">
-        <div className="flex items-center justify-between">
+      <div className="mx-auto max-w-5xl space-y-6">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card p-4">
           <div>
-            <h1 className="text-2xl font-semibold">{conversation.title}</h1>
-            <p className="text-sm text-muted-foreground">Conversation model and tool access.</p>
+            <h1 className="text-xl font-semibold">{conversation.title}</h1>
+            <p className="text-sm text-muted-foreground">Per-conversation model, tools, skills, and memory behavior.</p>
           </div>
           <Button onClick={save} disabled={isSaving}>
             <Save className="size-4" />
@@ -122,15 +143,18 @@ export default function ConversationSettingsPage() {
           </Button>
         </div>
 
-        <section className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-medium uppercase text-muted-foreground">Integrations</h2>
-            <Button variant="outline" size="sm" onClick={() => refreshHealth(true)} disabled={isHealthLoading}>
-              <RefreshCcw className="size-4" />
-              Refresh
-            </Button>
-          </div>
-          <div className="grid gap-2 md:grid-cols-2">
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base">Integration Health</CardTitle>
+              <Button variant="outline" size="sm" onClick={() => refreshHealth(true)} disabled={isHealthLoading}>
+                <RefreshCcw className="size-4" />
+                Refresh
+              </Button>
+            </div>
+            <CardDescription>Live provider, memory, and vault integration checks.</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-2 md:grid-cols-3">
             <div className="rounded-md border p-3 text-sm">
               <div className="mb-1 flex items-center justify-between">
                 <span className="font-medium">AgentMemory</span>
@@ -154,27 +178,52 @@ export default function ConversationSettingsPage() {
                 {typeof health?.obsidian?.note_count === 'number' ? ` · notes: ${health.obsidian.note_count}` : ''}
               </div>
             </div>
-          </div>
-        </section>
+            <div className="rounded-md border p-3 text-sm">
+              <div className="mb-1 flex items-center justify-between">
+                <span className="font-medium">LLM Provider</span>
+                <span className={health?.llm_connection?.live ? 'text-emerald-500' : 'text-amber-500'}>
+                  {health?.llm_connection?.live ? 'Live' : 'Down'}
+                </span>
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {health?.llm_connection?.api_type || 'unknown'} · {health?.llm_connection?.reason || 'Not checked yet'}
+                {typeof health?.llm_connection?.model_count === 'number'
+                  ? ` · models: ${health.llm_connection.model_count}`
+                  : ''}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
 
-        <section className="space-y-3">
-          <h2 className="text-sm font-medium uppercase text-muted-foreground">Model</h2>
-          <select
-            className="h-10 w-full rounded-md border bg-background px-3 text-sm"
-            value={model}
-            onChange={event => setModel(event.target.value)}
-          >
-            {models.map(item => (
-              <option key={item.id} value={item.id}>
-                {item.id}
-              </option>
-            ))}
-          </select>
-        </section>
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">Model</CardTitle>
+            <CardDescription>Default model for new runs in this conversation.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <select
+              className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+              value={model}
+              onChange={event => setModel(event.target.value)}
+            >
+              {models.map(item => (
+                <option key={item.id} value={item.id}>
+                  {item.id}
+                </option>
+              ))}
+            </select>
+          </CardContent>
+        </Card>
 
-        <section className="space-y-3">
-          <h2 className="text-sm font-medium uppercase text-muted-foreground">Tools</h2>
-          <div className="grid gap-2 md:grid-cols-2">
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Wrench className="size-4" />
+              Tool Permissions
+            </CardTitle>
+            <CardDescription>Limit tool access for this conversation only.</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-2 md:grid-cols-2">
             {tools.map(tool => {
               const globallyDisabled = tool.enabled === false;
               const enabled = !globallyDisabled && !disabled.has(tool.name);
@@ -186,29 +235,35 @@ export default function ConversationSettingsPage() {
                       {globallyDisabled ? 'Disabled by admin' : tool.name}
                     </span>
                   </span>
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     checked={enabled}
                     disabled={tool.locked || globallyDisabled}
-                    onChange={() => toggleTool(tool.name)}
+                    onCheckedChange={() => toggleTool(tool.name)}
                   />
                 </label>
               );
             })}
-          </div>
-        </section>
+          </CardContent>
+        </Card>
 
-        <section className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-medium uppercase text-muted-foreground">Skills</h2>
-            <label className="flex items-center gap-2 text-xs text-muted-foreground">
-              <input type="checkbox" checked={enableVendorSkills} onChange={e => setEnableVendorSkills(e.target.checked)} />
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <BrainCircuit className="size-4" />
+                Skill Registry
+              </CardTitle>
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Checkbox checked={enableVendorSkills} onCheckedChange={v => setEnableVendorSkills(Boolean(v))} />
               Enable vendor skills
-            </label>
-          </div>
-          <div className="max-h-[420px] space-y-2 overflow-auto rounded-md border p-2">
+              </label>
+            </div>
+            <CardDescription>Enable, disable, and pin skills for execution priority.</CardDescription>
+          </CardHeader>
+          <CardContent className="max-h-[420px] space-y-2 overflow-auto">
             {skills.map(skill => {
               const enabled = !disabledSkillSet.has(skill.name);
+              const pinned = pinnedSkillSet.has(skill.name);
               const fromVendor = skill.path.includes('/vendor/everything-claude-code/');
               return (
                 <label key={`${skill.path}:${skill.name}`} className="flex items-center justify-between rounded-md border p-3 text-sm">
@@ -216,18 +271,74 @@ export default function ConversationSettingsPage() {
                     <span className="block truncate font-medium">{skill.name}</span>
                     <span className="text-xs text-muted-foreground">{fromVendor ? 'vendor' : 'local'} · {skill.type}</span>
                   </span>
-                  <input
-                    type="checkbox"
-                    checked={enabled}
-                    onChange={() => toggleSkill(skill.name)}
-                    disabled={fromVendor && !enableVendorSkills}
-                  />
+                  <div className="flex items-center gap-3">
+                    <label className="flex items-center gap-1 text-xs text-muted-foreground">
+                      <Checkbox
+                        checked={pinned}
+                        onCheckedChange={() => togglePinnedSkill(skill.name)}
+                        disabled={fromVendor && !enableVendorSkills}
+                      />
+                      Pin
+                    </label>
+                    <Checkbox
+                      checked={enabled}
+                      onCheckedChange={() => toggleSkill(skill.name)}
+                      disabled={fromVendor && !enableVendorSkills}
+                    />
+                  </div>
                 </label>
               );
             })}
             {!skills.length && <div className="text-sm text-muted-foreground">No skills discovered.</div>}
-          </div>
-        </section>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base">Skill Curator</CardTitle>
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Checkbox checked={autoSkillCurator} onCheckedChange={v => setAutoSkillCurator(Boolean(v))} />
+              Auto-learn tool patterns
+              </label>
+            </div>
+            <CardDescription>Learns repeated successful tool chains from this conversation.</CardDescription>
+          </CardHeader>
+          <CardContent className="rounded-md border p-3 text-xs text-muted-foreground">
+            {(conversation.settings?.skill_suggestions || []).length ? (
+              <div className="space-y-2">
+                {(conversation.settings?.skill_suggestions || []).slice(0, 8).map(item => (
+                  <div key={item.key} className="rounded border p-2">
+                    <div className="font-mono text-[11px]">{item.tools.join(' → ')}</div>
+                    <div className="text-muted-foreground mt-1">
+                      seen {item.count}x
+                      {item.last_seen ? ` · ${new Date(item.last_seen * 1000).toLocaleString()}` : ''}
+                    </div>
+                    {item.last_prompt ? <div className="mt-1 truncate">{item.last_prompt}</div> : null}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div>No learned patterns yet.</div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">Identity Memory</CardTitle>
+            <CardDescription>Persistent profile notes injected into every run context.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Label className="mb-2 block text-xs text-muted-foreground">Profile Notes</Label>
+            <Textarea
+              className="min-h-32 text-sm"
+              placeholder="Project preferences, coding style, priorities, constraints..."
+              value={identityNotes}
+              onChange={event => setIdentityNotes(event.target.value)}
+            />
+          </CardContent>
+        </Card>
       </div>
     </div>
   );

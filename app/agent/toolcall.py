@@ -1,4 +1,5 @@
 import asyncio
+import difflib
 import json
 import re
 from typing import Any, List, Optional, Union
@@ -470,6 +471,7 @@ class ToolCallAgent(ReActAgent):
                             "tool_call_id": command.id,
                             "tool": name,
                             "path": str(path),
+                            "diff_preview": self._build_str_replace_diff_preview(args),
                         },
                     )
 
@@ -492,6 +494,7 @@ class ToolCallAgent(ReActAgent):
                 {
                     "message": f"Invalid JSON arguments for tool '{name}'",
                     "detail": command.function.arguments,
+                    "fatal": False,
                 },
             )
             return f"Error: {error_msg}"
@@ -499,9 +502,57 @@ class ToolCallAgent(ReActAgent):
             error_msg = f"Tool '{name}' encountered a problem: {str(e)}"
             task.emit(
                 "error",
-                {"message": "Tool execution failed", "tool": name, "detail": str(e)},
+                {
+                    "message": "Tool execution failed",
+                    "tool": name,
+                    "detail": str(e),
+                    "fatal": False,
+                },
             )
             return f"Error: {error_msg}"
+
+    @staticmethod
+    def _build_str_replace_diff_preview(args: dict) -> dict:
+        command = str(args.get("command") or "")
+        old_str = str(args.get("old_str") or "")
+        new_str = str(args.get("new_str") or "")
+        file_text = str(args.get("file_text") or "")
+
+        def _clip(
+            lines: list[str], max_lines: int = 120, max_len: int = 240
+        ) -> list[str]:
+            trimmed = [line[:max_len] for line in lines[:max_lines]]
+            if len(lines) > max_lines:
+                trimmed.append("... (diff truncated)")
+            return trimmed
+
+        payload: dict[str, Any] = {"command": command, "lines": []}
+
+        if command == "str_replace":
+            old_lines = old_str.splitlines()
+            new_lines = new_str.splitlines()
+            raw = list(
+                difflib.unified_diff(
+                    old_lines,
+                    new_lines,
+                    fromfile="before",
+                    tofile="after",
+                    n=2,
+                    lineterm="",
+                )
+            )
+            payload["lines"] = _clip(raw)
+            return payload
+
+        if command == "insert":
+            payload["lines"] = _clip([f"+{line}" for line in new_str.splitlines()])
+            return payload
+
+        if command == "create":
+            payload["lines"] = _clip([f"+{line}" for line in file_text.splitlines()])
+            return payload
+
+        return payload
 
     async def _emit_browser_screenshot(self, task: Task) -> Optional[str]:
         browser_tool = self.available_tools.get_tool(BrowserUseTool().name)

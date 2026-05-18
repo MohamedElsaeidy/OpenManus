@@ -364,14 +364,16 @@ class WebSearch(BaseTool):
             if config.search_config
             else "google"
         )
+        has_explicit_fallbacks = config.search_config and hasattr(
+            config.search_config, "fallback_engines"
+        )
         fallbacks = (
             [engine.lower() for engine in config.search_config.fallback_engines]
-            if config.search_config
-            and hasattr(config.search_config, "fallback_engines")
+            if has_explicit_fallbacks
             else []
         )
 
-        # Start with preferred engine, then fallbacks, then remaining engines
+        # Start with preferred engine, then fallbacks
         engine_order = [preferred] if preferred in self._search_engine else []
         engine_order.extend(
             [
@@ -380,7 +382,11 @@ class WebSearch(BaseTool):
                 if fb in self._search_engine and fb not in engine_order
             ]
         )
-        engine_order.extend([e for e in self._search_engine if e not in engine_order])
+        # Only add remaining engines when no explicit fallback list was configured
+        if not has_explicit_fallbacks:
+            engine_order.extend(
+                [e for e in self._search_engine if e not in engine_order]
+            )
 
         return engine_order
 
