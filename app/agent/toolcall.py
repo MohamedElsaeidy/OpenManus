@@ -212,6 +212,19 @@ class ToolCallAgent(ReActAgent):
 
             if self.tool_choices == ToolChoice.AUTO and not self.tool_calls:
                 if content.strip():
+                    if "[TEMPLATE_FALLBACK_FINAL]" in content:
+                        clean_content = content.replace(
+                            "[TEMPLATE_FALLBACK_FINAL]", ""
+                        ).strip()
+                        task.emit(
+                            "final_response",
+                            {
+                                "message": clean_content,
+                                "reason": "Template fallback forced graceful final summary.",
+                            },
+                        )
+                        self.state = AgentState.FINISHED
+                        return True
                     if not self._looks_final_response(content):
                         self._consecutive_no_tool_nonfinal += 1
                         # The model produced a continuation sentence without tool calls.
