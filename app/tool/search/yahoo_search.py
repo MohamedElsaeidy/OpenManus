@@ -1,10 +1,11 @@
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 import requests
 from bs4 import BeautifulSoup
 
 from app.logger import logger
 from app.tool.search.base import SearchItem, WebSearchEngine
+
 
 ABSTRACT_MAX_LENGTH = 300
 
@@ -19,6 +20,7 @@ HEADERS = {
     "Referer": "https://search.yahoo.com/",
     "Accept-Language": "en-US,en;q=0.9",
 }
+
 
 class YahooSearchEngine(WebSearchEngine):
     session: Optional[requests.Session] = None
@@ -37,7 +39,9 @@ class YahooSearchEngine(WebSearchEngine):
 
         list_result = []
         try:
-            res = self.session.get(url=f"https://search.yahoo.com/search?p={query}", timeout=10)
+            res = self.session.get(
+                url=f"https://search.yahoo.com/search?p={query}", timeout=10
+            )
             res.raise_for_status()
             root = BeautifulSoup(res.text, "html.parser")
 
@@ -46,14 +50,14 @@ class YahooSearchEngine(WebSearchEngine):
                     title_elem = div.find("h3")
                     if not title_elem:
                         continue
-                        
+
                     a_elem = title_elem.find("a")
                     if not a_elem:
                         continue
-                        
+
                     title = a_elem.text.strip()
                     url = a_elem.get("href", "").strip()
-                    
+
                     # Try to find the abstract by looking at the parent or next sibling
                     abstract = ""
                     parent_li = div.find_parent("li")

@@ -9,7 +9,11 @@ from typing import Any
 
 from app.config import config
 from app.exceptions import ToolError
-from app.task_context import emit_current_task, get_current_tool_call, get_current_workspace
+from app.task_context import (
+    emit_current_task,
+    get_current_tool_call,
+    get_current_workspace,
+)
 from app.tool.base import BaseTool
 
 
@@ -136,7 +140,9 @@ class ApplyPatchEditor(BaseTool):
             )
         return normalized
 
-    async def execute(self, *, patch: str, check_only: bool = False, **kwargs: Any) -> str:
+    async def execute(
+        self, *, patch: str, check_only: bool = False, **kwargs: Any
+    ) -> str:
         patch_text = str(patch or "").strip()
         if not patch_text:
             raise ToolError("Parameter `patch` is required and must be non-empty.")

@@ -876,6 +876,7 @@ class LLM:
             OpenAIError: If API call fails after retries
             Exception: For unexpected errors
         """
+
         def _template_error_text(exc: Exception) -> str:
             return str(exc).lower()
 
@@ -885,7 +886,9 @@ class LLM:
                 "jinja template" in text and "prompt template" in text
             )
 
-        def _build_template_fallback_messages(source_messages: List[dict]) -> List[dict]:
+        def _build_template_fallback_messages(
+            source_messages: List[dict],
+        ) -> List[dict]:
             # Preserve intent while avoiding brittle tool/template transcript shapes.
             snippets: list[str] = []
             for msg in reversed(source_messages):
@@ -1021,7 +1024,9 @@ class LLM:
                         "stream": False,
                     }
                     if model in REASONING_MODELS:
-                        fallback_params["max_completion_tokens"] = self.active_max_tokens()
+                        fallback_params[
+                            "max_completion_tokens"
+                        ] = self.active_max_tokens()
                     else:
                         fallback_params["max_tokens"] = self.active_max_tokens()
                         fallback_params["temperature"] = (
@@ -1030,7 +1035,9 @@ class LLM:
                             else self.active_temperature()
                         )
                     fallback_response: ChatCompletion = (
-                        await self.active_client().chat.completions.create(**fallback_params)
+                        await self.active_client().chat.completions.create(
+                            **fallback_params
+                        )
                     )
                     if (
                         fallback_response.choices
@@ -1049,7 +1056,9 @@ class LLM:
                             )
                         return fb_msg
                 except Exception as fallback_error:
-                    logger.error(f"Fallback after template error failed: {fallback_error}")
+                    logger.error(
+                        f"Fallback after template error failed: {fallback_error}"
+                    )
                 raise ValueError(
                     "Model prompt template rejected this tool-call transcript "
                     "(No user query found). Use a tool-capable template/model."
