@@ -25,7 +25,7 @@ const listAgentTools = async () => {
       { id: 'ask_human', name: 'Ask Human', description: 'Ask human for information' },
       { id: 'terminate', name: 'Terminate', description: 'Terminate the current task' },
       { id: 'create_chat_completion', name: 'Create Chat Completion', description: 'Create chat completion' },
-      { id: 'str_replace_editor', name: 'String Replace Editor', description: 'String replace and edit' },
+      { id: 'apply_patch_editor', name: 'Patch Editor', description: 'Apply unified diff patches atomically' },
       { id: 'chart_visualization', name: 'Chart Visualization', description: 'Data chart visualization' },
       { id: 'tool_collection', name: 'Tool Collection', description: 'Tool collection management' },
     ] as AgentTool[],

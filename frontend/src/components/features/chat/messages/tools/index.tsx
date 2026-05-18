@@ -69,6 +69,8 @@ export const ToolMessageContent = ({ message }: { message: AggregatedMessage & {
             const executeComplete = actToolMessages
               .flatMap(m => m.messages)
               .find(m => m.type === 'agent:lifecycle:step:act:tool:execute:complete' && m.content.id === toolCall.id);
+            const resultText = String(executeComplete?.content?.result || '');
+            const hasError = !!executeComplete?.content.error || /^Error:/i.test(resultText.trim());
 
             const { toolName, functionName } = getToolByPrefix(toolCall.function.name);
 
@@ -81,7 +83,7 @@ export const ToolMessageContent = ({ message }: { message: AggregatedMessage & {
                   setData({ type: 'tool', toolId: toolCall.id });
                 }}
               >
-                {executeComplete?.content.error ? (
+                {hasError ? (
                   <TriangleAlert className="h-3.5 w-3.5 text-rose-500" />
                 ) : executeComplete ? (
                   <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
@@ -102,7 +104,10 @@ export const ToolMessageContent = ({ message }: { message: AggregatedMessage & {
             const toolEvents = actToolMessages.find(m => m.content?.id === toolCall.id)?.messages || [];
             const executeComplete = toolEvents.find(m => m.type === 'agent:lifecycle:step:act:tool:execute:complete');
             const fileUpdates = toolEvents.filter(m => m.type === 'agent:lifecycle:step:act:tool:file:updated');
+            const added = fileUpdates.reduce((sum, item) => sum + Number(item.content?.added_lines || 0), 0);
+            const deleted = fileUpdates.reduce((sum, item) => sum + Number(item.content?.deleted_lines || 0), 0);
             const resultText = String(executeComplete?.content?.result || '').trim();
+            const hasError = !!executeComplete?.content?.error || /^Error:/i.test(resultText);
             const diffLines = (
               fileUpdates.find(m => Array.isArray(m.content?.diff_preview?.lines))?.content?.diff_preview?.lines as string[] | undefined
             ) || [];
@@ -117,11 +122,17 @@ export const ToolMessageContent = ({ message }: { message: AggregatedMessage & {
                     {toolCall.function.name}
                   </span>
                   <span className="text-muted-foreground">
-                    {executeComplete ? 'completed' : 'running'} · {fileUpdates.length} file change{fileUpdates.length === 1 ? '' : 's'}
+                    {executeComplete ? (hasError ? 'failed' : 'completed') : 'running'} · {fileUpdates.length} file change{fileUpdates.length === 1 ? '' : 's'}
+                    {fileUpdates.length ? (
+                      <>
+                        {' '}
+                        · <span className="text-emerald-600">+{added}</span> <span className="text-rose-600">-{deleted}</span>
+                      </>
+                    ) : null}
                   </span>
                 </div>
                 {shortResult ? (
-                  <div className="text-xs text-muted-foreground">{shortResult}{resultText.length > 180 ? '…' : ''}</div>
+                  <div className={`text-xs ${hasError ? 'text-rose-600' : 'text-muted-foreground'}`}>{shortResult}{resultText.length > 180 ? '…' : ''}</div>
                 ) : null}
                 {fileUpdates.length ? (
                   <div className="mt-1 text-xs text-muted-foreground">

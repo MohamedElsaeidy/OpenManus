@@ -478,13 +478,16 @@ class ToolCallAgent(ReActAgent):
             if name == "str_replace_editor" and isinstance(args, dict):
                 path = args.get("path")
                 if path:
+                    diff_preview = self._build_str_replace_diff_preview(args)
                     task.emit(
                         "workspace_file_updated",
                         {
                             "tool_call_id": command.id,
                             "tool": name,
                             "path": str(path),
-                            "diff_preview": self._build_str_replace_diff_preview(args),
+                            "added_lines": int(diff_preview.get("added_lines", 0)),
+                            "deleted_lines": int(diff_preview.get("deleted_lines", 0)),
+                            "diff_preview": diff_preview,
                         },
                     )
 
@@ -555,16 +558,28 @@ class ToolCallAgent(ReActAgent):
                 )
             )
             payload["lines"] = _clip(raw)
+            payload["added_lines"] = sum(
+                1 for line in raw if line.startswith("+") and not line.startswith("+++")
+            )
+            payload["deleted_lines"] = sum(
+                1 for line in raw if line.startswith("-") and not line.startswith("---")
+            )
             return payload
 
         if command == "insert":
             payload["lines"] = _clip([f"+{line}" for line in new_str.splitlines()])
+            payload["added_lines"] = len(new_str.splitlines())
+            payload["deleted_lines"] = 0
             return payload
 
         if command == "create":
             payload["lines"] = _clip([f"+{line}" for line in file_text.splitlines()])
+            payload["added_lines"] = len(file_text.splitlines())
+            payload["deleted_lines"] = 0
             return payload
 
+        payload["added_lines"] = 0
+        payload["deleted_lines"] = 0
         return payload
 
     async def _emit_browser_screenshot(self, task: Task) -> Optional[str]:
