@@ -2,7 +2,7 @@
   <img src="assets/logo.jpg" width="180" alt="OpenManus"/>
 </p>
 
-English | [中文](README_zh.md) | [한국어](README_ko.md) | [日本語](README_ja.md)
+English only.
 
 # OpenManus
 
@@ -34,6 +34,14 @@ OpenManus here is built for people who want an agent they can actually run, insp
 - OpenHands-style skill loading support
 - RL integration scaffold and policy export helper
 
+### Latest Additions
+
+- `apply_patch_editor` as the primary code-editing tool for safer, atomic patch updates
+- Live and final GitHub-style change summary (`files changed`, `+added`, `-deleted`)
+- Richer tool execution cards with better status and file-change visibility
+- Improved conversation reliability around long runs and follow-up continuity
+- Runtime context observability (requested window, received window, usage ratio, auto-compress status)
+
 ## Architecture
 
 - Backend API: `server/api.py` (FastAPI + SSE)
@@ -60,6 +68,14 @@ cp config/config.example.toml config/config.toml
 ```bash
 docker compose up --build
 ```
+
+Or use the project helper:
+
+```bash
+make build
+```
+
+`make build` runs a clean Docker builder prune and then starts the stack with `docker compose up -d --build`.
 
 4. Open:
 
