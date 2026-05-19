@@ -61,8 +61,8 @@ class Manus(ToolCallAgent):
             Bash(),
             BrowserUseTool(),
             WebSearch(),
-            LineEdit(),         # primary code editor — line-number based, no string matching
-            ApplyPatchEditor(), # multi-file atomic patches
+            LineEdit(),  # primary code editor — line-number based, no string matching
+            ApplyPatchEditor(),  # multi-file atomic patches
             MemorySave(),
             MemoryRecall(),
             AskHuman(),

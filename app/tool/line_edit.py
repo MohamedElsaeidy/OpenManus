@@ -25,11 +25,7 @@ from typing import Any
 
 from app.config import config
 from app.exceptions import ToolError
-from app.task_context import (
-    emit_current_task,
-    get_current_tool_call,
-    get_current_workspace,
-)
+from app.task_context import emit_current_task, get_current_tool_call
 from app.tool.base import BaseTool
 from app.tool.file_operators import LocalFileOperator, SandboxFileOperator
 
@@ -89,7 +85,11 @@ class LineEdit(BaseTool):
     _sandbox_operator: SandboxFileOperator = SandboxFileOperator()
 
     def _operator(self):
-        return self._sandbox_operator if config.sandbox.use_sandbox else self._local_operator
+        return (
+            self._sandbox_operator
+            if config.sandbox.use_sandbox
+            else self._local_operator
+        )
 
     async def execute(
         self,
@@ -156,8 +156,7 @@ class LineEdit(BaseTool):
 
         snippet_lines = new_lines[snip_start:snip_end]
         snippet = "".join(
-            f"{snip_start + i + 1:6}\t{ln}"
-            for i, ln in enumerate(snippet_lines)
+            f"{snip_start + i + 1:6}\t{ln}" for i, ln in enumerate(snippet_lines)
         )
 
         lines_deleted = max(0, slice_end - slice_start)

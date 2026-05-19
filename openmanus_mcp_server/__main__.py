@@ -3,5 +3,6 @@ import asyncio
 
 from openmanus_mcp_server.server import main  # noqa: E402
 
+
 if __name__ == "__main__":
     asyncio.run(main())
