@@ -5,6 +5,7 @@ from app.tool.browser_use_tool import BrowserUseTool
 from app.tool.codebase import CodebaseOverview, GlobSearch, GrepSearch, ReadFiles
 from app.tool.crawl4ai import Crawl4aiTool
 from app.tool.create_chat_completion import CreateChatCompletion
+from app.tool.line_edit import LineEdit
 from app.tool.long_term_memory import MemoryRecall, MemorySave
 from app.tool.planning import PlanningTool
 from app.tool.skill_playbook import SkillPlaybook
@@ -24,6 +25,7 @@ __all__ = [
     "GlobSearch",
     "GrepSearch",
     "ReadFiles",
+    "LineEdit",
     "Terminate",
     "StrReplaceEditor",
     "WebSearch",

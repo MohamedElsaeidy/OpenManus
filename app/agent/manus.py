@@ -14,6 +14,7 @@ from app.tool import (
     CodebaseOverview,
     GlobSearch,
     GrepSearch,
+    LineEdit,
     MemoryRecall,
     MemorySave,
     PlanningTool,
@@ -60,7 +61,8 @@ class Manus(ToolCallAgent):
             Bash(),
             BrowserUseTool(),
             WebSearch(),
-            ApplyPatchEditor(),
+            LineEdit(),         # primary code editor — line-number based, no string matching
+            ApplyPatchEditor(), # multi-file atomic patches
             MemorySave(),
             MemoryRecall(),
             AskHuman(),

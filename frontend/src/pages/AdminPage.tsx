@@ -164,6 +164,45 @@ export default function AdminPage() {
                   }
                 />
               </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">
+                  Thinking Budget
+                  <span className="ml-1 text-amber-500">⚡ reasoning</span>
+                </Label>
+                <Input
+                  placeholder="4096"
+                  type="number"
+                  value={settings.llm_connection.thinking_budget ?? ''}
+                  onChange={event =>
+                    setSettings({
+                      ...settings,
+                      llm_connection: {
+                        ...settings.llm_connection,
+                        thinking_budget: Number(event.target.value) || undefined,
+                      },
+                    })
+                  }
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">
+                  Max Agent Steps
+                </Label>
+                <Input
+                  placeholder="30"
+                  type="number"
+                  value={settings.llm_connection.max_steps ?? ''}
+                  onChange={event =>
+                    setSettings({
+                      ...settings,
+                      llm_connection: {
+                        ...settings.llm_connection,
+                        max_steps: Number(event.target.value) || undefined,
+                      },
+                    })
+                  }
+                />
+              </div>
             </div>
             <div className="space-y-2">
               <Label className="text-xs text-muted-foreground">Fallback Chain (ordered)</Label>
