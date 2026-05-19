@@ -1,6 +1,7 @@
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import {
@@ -15,7 +16,7 @@ import {
 import { listModels, type ModelOption } from '@/services/models';
 import { listTools } from '@/services/tools';
 import type { ToolOption } from '@/services/admin';
-import { BrainCircuit, RefreshCcw, Save, Wrench } from 'lucide-react';
+import { BrainCircuit, RefreshCcw, Save, SlidersHorizontal, Wrench } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -33,6 +34,9 @@ export default function ConversationSettingsPage() {
   const [pinnedSkills, setPinnedSkills] = useState<string[]>([]);
   const [identityNotes, setIdentityNotes] = useState('');
   const [autoSkillCurator, setAutoSkillCurator] = useState(true);
+  const [maxTokens, setMaxTokens] = useState<number | ''>('');
+  const [thinkingBudget, setThinkingBudget] = useState<number | ''>('');
+  const [maxSteps, setMaxSteps] = useState<number | ''>('');
   const [health, setHealth] = useState<IntegrationsHealth | null>(null);
   const [isHealthLoading, setIsHealthLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -67,6 +71,9 @@ export default function ConversationSettingsPage() {
         setPinnedSkills(loadedConversation.settings?.pinned_skills || []);
         setIdentityNotes(loadedConversation.settings?.identity_notes || '');
         setAutoSkillCurator(loadedConversation.settings?.auto_skill_curator ?? true);
+        setMaxTokens((loadedConversation.settings as any)?.max_tokens ?? '');
+        setThinkingBudget((loadedConversation.settings as any)?.thinking_budget ?? '');
+        setMaxSteps((loadedConversation.settings as any)?.max_steps ?? '');
       })
       .catch(error => toast.error(error instanceof Error ? error.message : 'Could not load settings'));
   }, [conversationId]);
@@ -119,7 +126,10 @@ export default function ConversationSettingsPage() {
         pinned_skills: pinnedSkills,
         identity_notes: identityNotes,
         auto_skill_curator: autoSkillCurator,
-      });
+        max_tokens: maxTokens !== '' ? maxTokens : undefined,
+        thinking_budget: thinkingBudget !== '' ? thinkingBudget : undefined,
+        max_steps: maxSteps !== '' ? maxSteps : undefined,
+      } as any);
       setConversation(saved);
       toast.success('Conversation settings saved');
     } catch (error) {
@@ -321,6 +331,51 @@ export default function ConversationSettingsPage() {
             ) : (
               <div>No learned patterns yet.</div>
             )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <SlidersHorizontal className="size-4" />
+              LLM Limits
+            </CardTitle>
+            <CardDescription>
+              Override max output tokens, thinking budget, and agent steps for this conversation.
+              Leave blank to use global defaults.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-4 md:grid-cols-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Max Output Tokens</Label>
+              <Input
+                type="number"
+                placeholder="8192 (global default)"
+                value={maxTokens}
+                onChange={e => setMaxTokens(e.target.value === '' ? '' : Number(e.target.value))}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">
+                Thinking Budget
+                <span className="ml-1 text-amber-500">⚡ reasoning</span>
+              </Label>
+              <Input
+                type="number"
+                placeholder="4096 (global default)"
+                value={thinkingBudget}
+                onChange={e => setThinkingBudget(e.target.value === '' ? '' : Number(e.target.value))}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Max Agent Steps</Label>
+              <Input
+                type="number"
+                placeholder="30 (global default)"
+                value={maxSteps}
+                onChange={e => setMaxSteps(e.target.value === '' ? '' : Number(e.target.value))}
+              />
+            </div>
           </CardContent>
         </Card>
 

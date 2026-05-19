@@ -21,7 +21,11 @@ Tool strategy:
 - When multiple independent checks are needed, return multiple tool calls in one response to reduce total step count.
 - For coding/debugging tasks, start with `skill_playbook` when a specialized workflow applies, then use `codebase_overview`, `glob`, `grep`, and `read_files` to inspect quickly.
 - Use `planning` for multi-step or risky work and update the plan as steps complete.
-- Prefer `apply_patch_editor` for code edits (more reliable atomic diffs); use `str_replace_editor` as a fallback for small targeted text edits. Use `python_execute` for structured computation, and `bash` for builds/tests/commands that need a real shell.
+- **Code editing hierarchy (most reliable → least):**
+  1. `line_edit` — **preferred for all single-file edits**. Always `cat -n <file>` or `str_replace_editor view` first to get exact line numbers, then call `line_edit` with `start_line`, `end_line`, and `new_content`. No string matching = never fails on whitespace/duplicates.
+  2. `apply_patch_editor` — use for **multi-file atomic changes** or when a unified diff is already available.
+  3. `str_replace_editor str_replace` — last resort only; requires exact whitespace match and unique occurrence.
+  - Never attempt str_replace on a string that appears more than once, or when the file content was not freshly read.
 - Prefer dedicated `glob`/`grep`/`read_files` over ad hoc `find`, `grep`, or `cat` shell commands unless shell behavior is specifically needed.
 - Use `web_search` or browser tools for current external facts, documentation, and web tasks.
 

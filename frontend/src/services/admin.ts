@@ -16,6 +16,8 @@ export interface AdminSettings {
     api_type?: string;
     max_tokens?: number;
     temperature?: number;
+    thinking_budget?: number;
+    max_steps?: number;
     fallback_chain?: Array<{
       model?: string;
       base_url?: string;
@@ -23,6 +25,7 @@ export interface AdminSettings {
       api_type?: string;
       max_tokens?: number;
       temperature?: number;
+      thinking_budget?: number;
     }>;
   };
   llm_connection_override?: AdminSettings['llm_connection'];
