@@ -89,6 +89,23 @@ def _is_local_server(base_url: str) -> bool:
         return False
 
 
+def _normalize_openai_base_url(url: Optional[str]) -> Optional[str]:
+    """Ensure OpenAI-compatible base URLs end with /v1 when targeting local servers like LM Studio."""
+    if not url:
+        return url
+    stripped = str(url).strip().rstrip("/")
+    if not stripped:
+        return stripped
+    if (
+        stripped.endswith("/v1")
+        or stripped.endswith("/api/v1")
+        or stripped.endswith("/v0")
+        or stripped.endswith("/api/v0")
+    ):
+        return stripped
+    return f"{stripped}/v1"
+
+
 def _should_retry_llm_exception(exc: Exception) -> bool:
     """Retry transient provider failures only."""
     if isinstance(
@@ -362,7 +379,9 @@ class LLM:
         elif self.api_type == "aws":
             self.client = BedrockClient()
         else:
-            self.client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
+            self.client = AsyncOpenAI(
+                api_key=self.api_key, base_url=_normalize_openai_base_url(self.base_url)
+            )
 
         self.token_counter = TokenCounter(self.tokenizer)
 
@@ -530,16 +549,21 @@ class LLM:
                 api_key=overrides.get("api_key", self.api_key),
                 api_version=self.api_version,
             )
+        base_url = overrides.get("base_url", self.base_url)
         return AsyncOpenAI(
             api_key=overrides.get("api_key", self.api_key),
-            base_url=overrides.get("base_url", self.base_url),
+            base_url=_normalize_openai_base_url(base_url),
         )
 
     def active_max_tokens(self) -> int:
         overrides = self.active_request_overrides()
-        return self._safe_int(
+        val = self._safe_int(
             overrides.get("max_tokens", self.max_tokens), self.max_tokens
         )
+        # Prevent low max_tokens cutoffs that truncate thinking/reasoning outputs
+        if val < 4096:
+            return 16896
+        return val
 
     def active_temperature(self) -> float:
         overrides = self.active_request_overrides()
@@ -731,12 +755,26 @@ class LLM:
         """Return true for OpenAI-compatible local servers with brittle chat templates."""
         base_url = self.active_base_url().lower()
         api_type = self.active_api_type().lower()
+        try:
+            from urllib.parse import urlparse
+
+            host = urlparse(base_url).hostname or ""
+            is_local_ip = (
+                host in _LOCAL_HOSTS
+                or host.startswith("10.")
+                or host.startswith("192.168.")
+                or host.startswith("172.")
+            )
+        except Exception:
+            is_local_ip = False
+
         return (
             api_type in {"ollama", "lmstudio", "local"}
             or ":1234" in base_url
             or "localhost" in base_url
             or "127.0.0.1" in base_url
             or "lmstudio" in base_url
+            or is_local_ip
         )
 
     @staticmethod
@@ -793,7 +831,7 @@ class LLM:
 
     @staticmethod
     def normalize_system_messages(
-        messages: List[dict], merge_leading: bool = False
+        messages: List[dict], merge_leading: bool = True
     ) -> List[dict]:
         """Ensure all system messages appear exclusively at the start of the transcript.
 

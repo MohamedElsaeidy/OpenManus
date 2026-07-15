@@ -52,3 +52,53 @@ export async function updateAdminSettings(settings: Partial<AdminSettings>): Pro
   if (!response.ok) throw new Error('Could not save admin settings');
   return response.json();
 }
+
+export interface CalibrationStatus {
+  phase: string;
+  message: string;
+  running: boolean;
+  progress: number;
+  model_id?: string;
+  embedding_model?: string;
+  result?: CalibrationResult;
+}
+
+export interface CalibrationResult {
+  model_id: string;
+  embedding_model: string;
+  optimal_context: number;
+  max_context_found: number;
+  generation_speed: number;
+  evaluation_speed: number;
+  gpu_offload: string;
+}
+
+export async function startCalibration(params: {
+  model?: string;
+  embedding_model?: string;
+  base_url?: string;
+}): Promise<{ status: string; message: string }> {
+  const response = await fetch('/api/admin/calibrate', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.detail || 'Could not start calibration');
+  }
+  return response.json();
+}
+
+export async function getCalibrationStatus(): Promise<CalibrationStatus> {
+  const response = await fetch('/api/admin/calibrate/status', { credentials: 'same-origin' });
+  if (!response.ok) throw new Error('Could not fetch calibration status');
+  return response.json();
+}
+
+export async function getCalibrationResult(): Promise<{ result: CalibrationResult | null }> {
+  const response = await fetch('/api/admin/calibration-result', { credentials: 'same-origin' });
+  if (!response.ok) throw new Error('Could not fetch calibration result');
+  return response.json();
+}

@@ -4,9 +4,29 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { getAdminSettings, updateAdminSettings, type AdminSettings } from '@/services/admin';
-import { Save, ShieldCheck, SlidersHorizontal, Wrench } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import {
+  getAdminSettings,
+  getCalibrationResult,
+  getCalibrationStatus,
+  startCalibration,
+  updateAdminSettings,
+  type AdminSettings,
+  type CalibrationResult,
+  type CalibrationStatus,
+} from '@/services/admin';
+import {
+  Activity,
+  CheckCircle2,
+  Cpu,
+  Gauge,
+  Loader2,
+  Save,
+  ShieldCheck,
+  SlidersHorizontal,
+  Wrench,
+  Zap,
+} from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 export default function AdminPage() {
@@ -14,6 +34,12 @@ export default function AdminPage() {
   const [configOverridesText, setConfigOverridesText] = useState('{}');
   const [fallbackChainText, setFallbackChainText] = useState('[]');
   const [isSaving, setIsSaving] = useState(false);
+
+  // Calibration state
+  const [calStatus, setCalStatus] = useState<CalibrationStatus | null>(null);
+  const [calResult, setCalResult] = useState<CalibrationResult | null>(null);
+  const [embeddingModel, setEmbeddingModel] = useState('');
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     getAdminSettings()
@@ -25,6 +51,56 @@ export default function AdminPage() {
         );
       })
       .catch(error => toast.error(error.message));
+
+    // Load last calibration result
+    getCalibrationResult()
+      .then(data => {
+        if (data.result) setCalResult(data.result);
+      })
+      .catch(() => {});
+
+    // Check if calibration is running
+    getCalibrationStatus()
+      .then(data => {
+        if (data.running) {
+          setCalStatus(data);
+          startPolling();
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const startPolling = useCallback(() => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = setInterval(async () => {
+      try {
+        const status = await getCalibrationStatus();
+        setCalStatus(status);
+        if (!status.running) {
+          if (pollRef.current) clearInterval(pollRef.current);
+          pollRef.current = null;
+          if (status.result) {
+            setCalResult(status.result);
+          }
+          // Reload admin settings to reflect auto-saved values
+          try {
+            const refreshed = await getAdminSettings();
+            setSettings(refreshed);
+            setConfigOverridesText(JSON.stringify(refreshed.config_overrides || {}, null, 2));
+            setFallbackChainText(
+              JSON.stringify(refreshed.llm_connection?.fallback_chain || [], null, 2),
+            );
+          } catch { /* ignore */ }
+        }
+      } catch {
+        // ignore polling errors
+      }
+    }, 1500);
   }, []);
 
   if (!settings) {
@@ -67,6 +143,24 @@ export default function AdminPage() {
       setIsSaving(false);
     }
   };
+
+  const handleStartCalibration = async () => {
+    try {
+      await startCalibration({
+        model: settings.llm_connection.model || undefined,
+        base_url: settings.llm_connection.base_url || undefined,
+        embedding_model: embeddingModel || undefined,
+      });
+      setCalStatus({ phase: 'init', message: 'Starting...', running: true, progress: 0 });
+      startPolling();
+      toast.success('Calibration started');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not start calibration');
+    }
+  };
+
+  const isCalibrating = calStatus?.running === true;
+  const calProgress = calStatus?.progress ?? 0;
 
   return (
     <div className="h-full overflow-y-auto p-6">
@@ -216,6 +310,144 @@ export default function AdminPage() {
 ]`}
               />
             </div>
+          </CardContent>
+        </Card>
+
+        {/* Model Auto-Calibration Card */}
+        <Card className="border-blue-500/30 bg-gradient-to-br from-blue-500/5 via-card to-purple-500/5">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Gauge className="size-4 text-blue-500" />
+              Model Auto-Calibration
+              <span className="ml-1 rounded-full bg-blue-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-blue-500">
+                gpu optimizer
+              </span>
+            </CardTitle>
+            <CardDescription>
+              Automatically finds the maximum context window that fits entirely in GPU VRAM at full speed.
+              Binary-searches across context sizes, benchmarks throughput, and saves optimal settings.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {/* Embedding model input */}
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">
+                  Embedding Model <span className="text-muted-foreground/60">(optional)</span>
+                </Label>
+                <Input
+                  placeholder="text-embedding-nomic-embed-text-v1.5"
+                  value={embeddingModel}
+                  onChange={event => setEmbeddingModel(event.target.value)}
+                  disabled={isCalibrating}
+                />
+              </div>
+              <div className="flex items-end">
+                <Button
+                  onClick={handleStartCalibration}
+                  disabled={isCalibrating || !settings.llm_connection.base_url}
+                  className="w-full gap-2 bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {isCalibrating ? (
+                    <>
+                      <Loader2 className="size-4 animate-spin" />
+                      Calibrating...
+                    </>
+                  ) : (
+                    <>
+                      <Zap className="size-4" />
+                      Start Calibration
+                    </>
+                  )}
+                </Button>
+              </div>
+            </div>
+
+            {/* Progress bar */}
+            {calStatus && (calStatus.running || calStatus.phase === 'done' || calStatus.phase === 'error') && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="flex items-center gap-1.5 font-medium">
+                    {calStatus.phase === 'error' ? (
+                      <span className="text-red-500">✗ Error</span>
+                    ) : calStatus.phase === 'done' ? (
+                      <span className="flex items-center gap-1 text-green-500">
+                        <CheckCircle2 className="size-3.5" /> Complete
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1 text-blue-500">
+                        <Activity className="size-3.5 animate-pulse" />
+                        {calStatus.phase === 'search' ? 'Binary Search' :
+                         calStatus.phase === 'benchmark' ? 'Benchmarking' :
+                         calStatus.phase === 'detect' ? 'Detecting' : 'Initializing'}
+                      </span>
+                    )}
+                  </span>
+                  <span className="tabular-nums text-muted-foreground">{calProgress}%</span>
+                </div>
+                {/* Progress track */}
+                <div className="relative h-2 w-full overflow-hidden rounded-full bg-muted">
+                  <div
+                    className={`absolute left-0 top-0 h-full rounded-full transition-all duration-500 ease-out ${
+                      calStatus.phase === 'error'
+                        ? 'bg-red-500'
+                        : calStatus.phase === 'done'
+                          ? 'bg-green-500'
+                          : 'bg-blue-500'
+                    }`}
+                    style={{ width: `${calProgress}%` }}
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">{calStatus.message}</p>
+              </div>
+            )}
+
+            {/* Results card */}
+            {calResult && (
+              <div className="rounded-lg border border-green-500/20 bg-green-500/5 p-4">
+                <div className="mb-3 flex items-center gap-2 text-sm font-medium text-green-600 dark:text-green-400">
+                  <CheckCircle2 className="size-4" />
+                  Calibration Results
+                </div>
+                <div className="grid gap-3 md:grid-cols-3">
+                  <div className="rounded-md border bg-card p-3 text-center">
+                    <div className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
+                      <Cpu className="size-3" /> Optimal Context
+                    </div>
+                    <div className="mt-1 text-lg font-bold tabular-nums">
+                      {calResult.optimal_context.toLocaleString()}
+                    </div>
+                    <div className="text-[10px] text-muted-foreground">tokens</div>
+                  </div>
+                  <div className="rounded-md border bg-card p-3 text-center">
+                    <div className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
+                      <Zap className="size-3" /> Generation Speed
+                    </div>
+                    <div className="mt-1 text-lg font-bold tabular-nums">
+                      {calResult.generation_speed}
+                    </div>
+                    <div className="text-[10px] text-muted-foreground">tokens/sec</div>
+                  </div>
+                  <div className="rounded-md border bg-card p-3 text-center">
+                    <div className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
+                      <Activity className="size-3" /> Evaluation Speed
+                    </div>
+                    <div className="mt-1 text-lg font-bold tabular-nums">
+                      {calResult.evaluation_speed}
+                    </div>
+                    <div className="text-[10px] text-muted-foreground">tokens/sec</div>
+                  </div>
+                </div>
+                <div className="mt-3 grid gap-1.5 text-xs text-muted-foreground md:grid-cols-2">
+                  <div>Model: <span className="font-medium text-foreground">{calResult.model_id}</span></div>
+                  <div>GPU Offload: <span className="font-medium text-foreground">{calResult.gpu_offload}</span></div>
+                  {calResult.embedding_model && (
+                    <div>Embedding: <span className="font-medium text-foreground">{calResult.embedding_model}</span></div>
+                  )}
+                  <div>Max Found: <span className="font-medium text-foreground">{calResult.max_context_found.toLocaleString()} tokens</span></div>
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
 

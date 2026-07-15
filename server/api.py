@@ -1911,6 +1911,371 @@ async def update_admin_settings(request: Request):
         }
 
 
+# ---------------------------------------------------------------------------
+# Model auto-calibration endpoint
+# ---------------------------------------------------------------------------
+
+_calibration_status: dict = {}
+
+
+def _calibrate_model_sync(
+    base_url: str,
+    model_id: str,
+    api_key: str | None,
+    embedding_model: str | None,
+) -> dict:
+    """Run a binary-search calibration to find the maximum context window
+    that fits entirely in GPU VRAM (full speed) alongside the embedding model.
+
+    This is deliberately synchronous – called from a background thread so the
+    SSE stream can push live status updates to the UI.
+    """
+    import time
+    import urllib.request
+    import urllib.error
+
+    global _calibration_status
+
+    parsed = urlparse.urlparse(base_url.strip())
+    root = f"{parsed.scheme}://{parsed.netloc}"
+
+    def _post_json(url: str, payload: dict, timeout: int = 180) -> dict:
+        req = urlrequest.Request(
+            url,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+            data=json.dumps(payload).encode("utf-8"),
+        )
+        if api_key:
+            req.add_header("Authorization", f"Bearer {api_key}")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    def _get_json(url: str, timeout: int = 15) -> dict:
+        req = urlrequest.Request(url, method="GET")
+        if api_key:
+            req.add_header("Authorization", f"Bearer {api_key}")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    def status(phase: str, message: str, progress: int = -1, **extra):
+        _calibration_status.update(
+            phase=phase, message=message, progress=progress,
+            running=True, **extra,
+        )
+
+    def try_load_config(context_len: int) -> bool:
+        """Attempt to load model with the given context length and full GPU.
+        Returns True if BOTH the LLM and the embedding model load."""
+        import subprocess
+
+        lms = os.path.expanduser("~/.lmstudio/bin/lms")
+        if not os.path.isfile(lms):
+            # Fall back to API-only check if lms CLI is not available
+            return _try_load_via_api(root, model_id, context_len, embedding_model, api_key)
+
+        # Unload all
+        subprocess.run([lms, "unload", "--all"], capture_output=True, timeout=30)
+        time.sleep(2)
+
+        # Load main model with full GPU offload
+        result = subprocess.run(
+            [lms, "load", model_id, "--gpu", "max", "-c", str(context_len), "-y"],
+            capture_output=True, text=True, timeout=120,
+        )
+        if result.returncode != 0:
+            return False
+
+        # Load embedding model if specified
+        if embedding_model:
+            time.sleep(1)
+            result = subprocess.run(
+                [lms, "load", embedding_model, "-y"],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode != 0:
+                # Embedding failed – this context size is too large
+                return False
+
+        return True
+
+    def run_speed_benchmark() -> dict:
+        """Run a quick benchmark against the currently loaded model."""
+        completions_url = f"{root}/v1/chat/completions"
+
+        # Pass 1: generation speed
+        try:
+            t0 = time.time()
+            resp = _post_json(completions_url, {
+                "model": model_id,
+                "messages": [{"role": "user", "content": "Write a short creative story about a cat in exactly two paragraphs."}],
+                "temperature": 0.0,
+                "max_tokens": 150,
+            })
+            duration = time.time() - t0
+            usage = resp.get("usage", {})
+            gen_tokens = usage.get("completion_tokens", 0)
+            gen_rate = gen_tokens / duration if duration > 0 and gen_tokens > 0 else 0
+        except Exception:
+            gen_rate = 0
+            gen_tokens = 0
+
+        # Pass 2: prompt evaluation speed
+        try:
+            filler = "The Model Context Protocol is an open standard for AI communication. "
+            large_prompt = (filler * 300) + "\nSummarize the above in three words."
+            t0 = time.time()
+            resp = _post_json(completions_url, {
+                "model": model_id,
+                "messages": [{"role": "user", "content": large_prompt}],
+                "temperature": 0.0,
+                "max_tokens": 5,
+            })
+            duration2 = time.time() - t0
+            usage2 = resp.get("usage", {})
+            prompt_tokens = usage2.get("prompt_tokens", 0)
+            comp_tokens2 = usage2.get("completion_tokens", 0)
+            est_gen_time = comp_tokens2 / gen_rate if gen_rate > 0 else 0
+            eval_time = max(0.001, duration2 - est_gen_time)
+            eval_rate = prompt_tokens / eval_time if prompt_tokens > 0 else 0
+        except Exception:
+            eval_rate = 0
+            prompt_tokens = 0
+
+        return {
+            "generation_speed": round(gen_rate, 2),
+            "evaluation_speed": round(eval_rate, 2),
+            "generation_tokens": gen_tokens,
+            "evaluation_tokens": prompt_tokens,
+        }
+
+    # --- Main calibration flow ---
+
+    status("init", "Starting model calibration...", 0)
+
+    # Step 1: Detect if the model is already loaded via /v1/models
+    status("detect", "Detecting loaded models...", 5)
+    try:
+        models_resp = _get_json(f"{root}/v1/models", timeout=8)
+        loaded_models = models_resp.get("data", [])
+        llm_models = [m for m in loaded_models if isinstance(m, dict) and m.get("type") != "embeddings"]
+        embed_models = [m for m in loaded_models if isinstance(m, dict) and m.get("type") == "embeddings"]
+
+        if not model_id and llm_models:
+            model_id_detected = llm_models[0].get("id", "")
+        else:
+            model_id_detected = model_id
+
+        if not embedding_model and embed_models:
+            embedding_model_detected = embed_models[0].get("id", "")
+        else:
+            embedding_model_detected = embedding_model
+    except Exception:
+        model_id_detected = model_id
+        embedding_model_detected = embedding_model
+
+    if not model_id_detected:
+        _calibration_status.update(
+            phase="error", message="No model specified or detected. Load a model in LM Studio first.",
+            running=False, progress=100,
+        )
+        return {"error": "No model detected"}
+
+    # Update effective values
+    model_id = model_id_detected
+    embedding_model = embedding_model_detected
+
+    status("detect", f"Calibrating model: {model_id}", 10,
+           model_id=model_id, embedding_model=embedding_model or "none")
+
+    # Step 2: Binary search for max context window
+    # Start with known bounds
+    lo = 8000       # minimum useful context
+    hi = 262144     # absolute max for most models
+    best = lo
+    step_count = 0
+    max_steps = 18  # log2(262144/8000) ≈ 15, add margin
+
+    status("search", f"Binary search: testing range {lo:,} – {hi:,} tokens", 15)
+
+    # First, test the low bound to make sure the model loads at all
+    status("search", f"Testing minimum context: {lo:,} tokens...", 18)
+    if not try_load_config(lo):
+        _calibration_status.update(
+            phase="error",
+            message=f"Model '{model_id}' failed to load even at {lo:,} context. Check GPU memory.",
+            running=False, progress=100,
+        )
+        return {"error": f"Cannot load model at minimum context {lo}"}
+    best = lo
+
+    while lo <= hi and step_count < max_steps:
+        mid = (lo + hi) // 2
+        # Round to nearest 1000 for cleaner values
+        mid = (mid // 1000) * 1000
+        if mid <= best:
+            break
+
+        step_count += 1
+        pct = 20 + int(55 * step_count / max_steps)
+        status("search", f"Testing context: {mid:,} tokens... (step {step_count})", pct)
+
+        if try_load_config(mid):
+            best = mid
+            lo = mid + 1000
+            status("search", f"✓ {mid:,} tokens fits! Trying higher...", pct)
+        else:
+            hi = mid - 1000
+            status("search", f"✗ {mid:,} tokens too large. Trying lower...", pct)
+
+    # Round best down to nearest 5000 for a safe production default
+    safe_best = (best // 5000) * 5000
+    if safe_best < 8000:
+        safe_best = 8000
+
+    status("benchmark", f"Optimal context: {safe_best:,} tokens. Loading for benchmark...", 80)
+
+    # Load the final config for benchmarking
+    try_load_config(safe_best)
+    time.sleep(2)
+
+    # Step 3: Run speed benchmark
+    status("benchmark", "Running speed benchmark...", 85)
+    benchmark = run_speed_benchmark()
+
+    status("done", f"Calibration complete! Optimal: {safe_best:,} tokens @ {benchmark['generation_speed']} tok/s", 100)
+
+    result = {
+        "model_id": model_id,
+        "embedding_model": embedding_model or "",
+        "optimal_context": safe_best,
+        "max_context_found": best,
+        "generation_speed": benchmark["generation_speed"],
+        "evaluation_speed": benchmark["evaluation_speed"],
+        "gpu_offload": "max",
+    }
+
+    _calibration_status.update(
+        phase="done", running=False, progress=100,
+        result=result,
+        message=f"Calibration complete! Optimal context: {safe_best:,} tokens, "
+                f"Generation: {benchmark['generation_speed']} tok/s, "
+                f"Evaluation: {benchmark['evaluation_speed']} tok/s",
+    )
+
+    return result
+
+
+def _try_load_via_api(
+    root: str, model_id: str, context_len: int,
+    embedding_model: str | None, api_key: str | None,
+) -> bool:
+    """Fallback: attempt to verify a model loads by querying the API.
+    This is less precise than the CLI approach but works remotely."""
+    import time
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    try:
+        payload = {
+            "model": model_id,
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 1,
+        }
+        req = urlrequest.Request(
+            f"{root}/v1/chat/completions",
+            method="POST", headers=headers,
+            data=json.dumps(payload).encode("utf-8"),
+        )
+        with urlrequest.urlopen(req, timeout=60) as resp:
+            resp.read()
+        return True
+    except Exception:
+        return False
+
+
+@app.post("/api/admin/calibrate")
+async def start_calibration(request: Request):
+    """Launch model auto-calibration in a background thread."""
+    _require_admin(request)
+
+    global _calibration_status
+    if _calibration_status.get("running"):
+        raise HTTPException(status_code=409, detail="Calibration already in progress")
+
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+
+    with registry.SessionLocal() as session:
+        connection = _effective_llm_connection(session)
+
+    base_url = body.get("base_url") or connection.get("base_url", "")
+    model_id = body.get("model") or connection.get("model", "")
+    api_key = body.get("api_key") or connection.get("api_key") or ""
+    embedding_model = body.get("embedding_model") or ""
+
+    if not base_url:
+        raise HTTPException(status_code=400, detail="No base_url configured")
+
+    _calibration_status = {"phase": "init", "message": "Starting...", "running": True, "progress": 0}
+
+    import threading
+
+    def _run():
+        try:
+            result = _calibrate_model_sync(base_url, model_id, api_key or None, embedding_model or None)
+            # Auto-save the optimal settings if calibration succeeded
+            if "error" not in result:
+                with registry.SessionLocal() as session:
+                    existing = _get_app_setting(session, "llm_connection", {})
+                    if isinstance(existing, dict):
+                        existing["model"] = result["model_id"]
+                        existing["max_tokens"] = min(
+                            result["optimal_context"] // 4, 32768
+                        )
+                    else:
+                        existing = {
+                            "model": result["model_id"],
+                            "base_url": base_url,
+                            "api_type": "lmstudio",
+                            "max_tokens": min(result["optimal_context"] // 4, 32768),
+                        }
+                    _set_app_setting(session, "llm_connection", existing)
+
+                    # Save calibration results for reference
+                    _set_app_setting(session, "calibration_result", result)
+                    session.commit()
+        except Exception as exc:
+            _calibration_status.update(
+                phase="error", message=f"Calibration failed: {exc}",
+                running=False, progress=100,
+            )
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+
+    return {"status": "started", "message": "Calibration started in background"}
+
+
+@app.get("/api/admin/calibrate/status")
+async def calibration_status(request: Request):
+    """Return current calibration progress."""
+    _require_admin(request)
+    return _calibration_status or {"phase": "idle", "message": "No calibration running", "running": False, "progress": 0}
+
+
+@app.get("/api/admin/calibration-result")
+async def get_calibration_result(request: Request):
+    """Return the last saved calibration result."""
+    _require_admin(request)
+    with registry.SessionLocal() as session:
+        result = _get_app_setting(session, "calibration_result", None)
+    return {"result": result}
+
+
 @app.get("/api/conversations")
 async def list_conversations(request: Request):
     user = _require_user(request)

@@ -125,7 +125,15 @@ class AgentMemoryClient:
                     else "lm-studio"
                 )
 
-        url = base_url.rstrip("/") + "/embeddings"
+        clean_base = base_url.strip().rstrip("/")
+        if not (
+            clean_base.endswith("/v1")
+            or clean_base.endswith("/api/v1")
+            or clean_base.endswith("/v0")
+            or clean_base.endswith("/api/v0")
+        ):
+            clean_base = f"{clean_base}/v1"
+        url = clean_base + "/embeddings"
         model = getattr(
             self.settings, "embedding_model", "text-embedding-nomic-embed-text-v1.5"
         )
