@@ -45,9 +45,7 @@ DEFAULT_CONVERSATION_ID = os.getenv("OPENMANUS_DEFAULT_CONVERSATION_ID", "main")
 SESSION_COOKIE = "openmanus_session"
 SESSION_DAYS = int(os.getenv("OPENMANUS_SESSION_DAYS", "30"))
 WORKSPACE_ROOT = os.getenv("OPENMANUS_WORKSPACE_ROOT", "/app/workspace")
-HOST_WORKSPACE_ROOT = os.getenv(
-    "OPENMANUS_HOST_WORKSPACE_ROOT", "/app/workspace"
-)
+HOST_WORKSPACE_ROOT = os.getenv("OPENMANUS_HOST_WORKSPACE_ROOT", "/app/workspace")
 
 
 app = FastAPI(title="OpenManus Task API", version="0.1.0")
@@ -82,10 +80,12 @@ def _ensure_schema_updates() -> None:
                 "ON conversation_events (conversation_id, created_at, event_id)"
             )
         )
-        
+
         # Ensure Obsidian unique constraints exist
         note_constraint = connection.execute(
-            text("SELECT 1 FROM information_schema.table_constraints WHERE constraint_name='uq_obsidian_note_conv_path'")
+            text(
+                "SELECT 1 FROM information_schema.table_constraints WHERE constraint_name='uq_obsidian_note_conv_path'"
+            )
         ).fetchone()
         if not note_constraint:
             # Clean up duplicate notes keeping the latest one
@@ -96,11 +96,15 @@ def _ensure_schema_updates() -> None:
                 )
             )
             connection.execute(
-                text("ALTER TABLE obsidian_notes ADD CONSTRAINT uq_obsidian_note_conv_path UNIQUE (conversation_id, path)")
+                text(
+                    "ALTER TABLE obsidian_notes ADD CONSTRAINT uq_obsidian_note_conv_path UNIQUE (conversation_id, path)"
+                )
             )
 
         edge_constraint = connection.execute(
-            text("SELECT 1 FROM information_schema.table_constraints WHERE constraint_name='uq_obsidian_edge_conv_src_tgt_rel'")
+            text(
+                "SELECT 1 FROM information_schema.table_constraints WHERE constraint_name='uq_obsidian_edge_conv_src_tgt_rel'"
+            )
         ).fetchone()
         if not edge_constraint:
             # Clean up duplicate edges keeping the latest one
@@ -2057,9 +2061,7 @@ async def import_obsidian_context(request: Request, conversation_id: str):
                         target = title_matches[0]
                     # else: ambiguous or not found — skip
                 if target is not None and target.note_id != note.note_id:
-                    desired_edges.add(
-                        (note.note_id, target.note_id, "wikilink")
-                    )
+                    desired_edges.add((note.note_id, target.note_id, "wikilink"))
 
         # Query existing edges sourced from upserted notes only
         existing_edge_rows = (

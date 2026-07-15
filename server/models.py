@@ -1,6 +1,14 @@
 import uuid
 
-from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, String, UniqueConstraint, func
+from sqlalchemy import (
+    BigInteger,
+    Column,
+    DateTime,
+    ForeignKey,
+    String,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import declarative_base
 
@@ -118,7 +126,10 @@ class ObsidianEdgeORM(Base):
     __tablename__ = "obsidian_edges"
     __table_args__ = (
         UniqueConstraint(
-            "conversation_id", "source_note_id", "target_note_id", "relation",
+            "conversation_id",
+            "source_note_id",
+            "target_note_id",
+            "relation",
             name="uq_obsidian_edge_conv_src_tgt_rel",
         ),
     )

@@ -751,9 +751,7 @@ def auto_sync_obsidian_notes(conversation_id: str, workspace_root: Path) -> None
                         target = title_matches[0]
                     # else: ambiguous or not found — skip
                 if target is not None and target.note_id != note.note_id:
-                    desired_edges.add(
-                        (note.note_id, target.note_id, "wikilink")
-                    )
+                    desired_edges.add((note.note_id, target.note_id, "wikilink"))
 
         # Query existing edges sourced from touched notes only
         existing_edge_rows = (

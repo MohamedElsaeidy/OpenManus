@@ -6,10 +6,7 @@ These reproduce the exact bugs reported and verify the fixes:
 3. Diff-based edge updates preserve edges from untouched notes.
 """
 import re
-import uuid
 from collections import defaultdict
-
-import pytest
 
 
 # --------------------------------------------------------------------------
@@ -85,7 +82,9 @@ class TestPathQualifiedLinks:
 
     def test_path_qualified_link_resolves(self):
         note_a = FakeNote("note-A", "projects/Overview.md", "Overview")
-        note_b = FakeNote("note-B", "notes/index.md", "Index", content="See [[projects/Overview]]")
+        note_b = FakeNote(
+            "note-B", "notes/index.md", "Index", content="See [[projects/Overview]]"
+        )
 
         result = resolve_wikilink("projects/Overview", [note_a, note_b])
         assert result is not None, "Path-qualified link should resolve"
@@ -99,7 +98,9 @@ class TestPathQualifiedLinks:
 
     def test_path_qualified_edge_created(self):
         note_a = FakeNote("note-A", "projects/Overview.md", "Overview")
-        note_b = FakeNote("note-B", "notes/index.md", "Index", content="See [[projects/Overview]]")
+        note_b = FakeNote(
+            "note-B", "notes/index.md", "Index", content="See [[projects/Overview]]"
+        )
 
         edges = compute_edges([note_b], [note_a, note_b])
         assert ("note-B", "note-A", "wikilink") in edges
@@ -118,7 +119,9 @@ class TestDuplicateTitles:
         note_b = FakeNote("note-B", "notes/Overview.md", "Overview")
 
         result = resolve_wikilink("Overview", [note_a, note_b])
-        assert result is None, "Duplicate title should be ambiguous — link must NOT resolve"
+        assert (
+            result is None
+        ), "Duplicate title should be ambiguous — link must NOT resolve"
 
     def test_unique_title_still_resolves(self):
         note_a = FakeNote("note-A", "projects/Overview.md", "Overview")
@@ -157,10 +160,14 @@ class TestDiffBasedEdges:
 
     def test_edges_from_untouched_notes_preserved(self):
         # Simulate: imported vault created edges from note_imp
-        note_imp = FakeNote("note-imp", "vault/Research.md", "Research", content="See [[Design]]")
+        note_imp = FakeNote(
+            "note-imp", "vault/Research.md", "Research", content="See [[Design]]"
+        )
         note_des = FakeNote("note-des", "vault/Design.md", "Design")
         # Workspace auto-sync only touches workspace notes
-        note_ws = FakeNote("note-ws", "readme.md", "README", content="Links to [[Design]]")
+        note_ws = FakeNote(
+            "note-ws", "readme.md", "README", content="Links to [[Design]]"
+        )
 
         all_notes = [note_imp, note_des, note_ws]
 
