@@ -53,12 +53,15 @@ export async function loadModel(payload: {
   return { ok: true };
 }
 
-export async function ejectModel(model?: string): Promise<{ ok: boolean; instance_id?: string; detail?: string }> {
+export async function ejectModel(
+  payload?: string | { model?: string; host?: string; api_key?: string; style?: string },
+): Promise<{ ok: boolean; instance_id?: string; detail?: string }> {
+  const bodyPayload = typeof payload === 'string' ? { model: payload } : payload || {};
   const response = await fetch('/api/models/eject', {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(model ? { model } : {}),
+    body: JSON.stringify(bodyPayload),
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {

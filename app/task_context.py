@@ -49,7 +49,22 @@ def get_current_model() -> Optional[str]:
 
 
 def get_current_llm_connection() -> Optional[dict]:
-    return current_llm_connection.get()
+    conn = current_llm_connection.get()
+    if conn and isinstance(conn, dict) and conn.get("base_url"):
+        return conn
+    try:
+        from app.runtime_settings import get_llm_connection as get_runtime_llm_conn
+
+        runtime_conn = get_runtime_llm_conn()
+        if (
+            runtime_conn
+            and isinstance(runtime_conn, dict)
+            and runtime_conn.get("base_url")
+        ):
+            return runtime_conn
+    except Exception:
+        pass
+    return conn
 
 
 def get_current_requested_context_window() -> Optional[int]:

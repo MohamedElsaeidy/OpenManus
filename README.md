@@ -41,6 +41,9 @@ OpenManus here is built for people who want an agent they can actually run, insp
 - Richer tool execution cards with better status and file-change visibility
 - Improved conversation reliability around long runs and follow-up continuity
 - Runtime context observability (requested window, received window, usage ratio, auto-compress status)
+- **Dynamic UI Connection Profiles**: Active model and provider connection settings configured directly in the Admin UI dynamically override static `config/config.toml` settings across backend worker tasks, agent execution loops, and semantic memory indexing (`AgentMemory`).
+- **LM Studio API v1 Integration**: Native `/api/v1` model management (`/models/load`, `/models/unload`, `/models`) with resilient HTTP 404 fallback to `/api/v0` and automatic requested context window slot synchronization (`128k` default).
+- **Obsidian Graph & Wikilink Synchronization**: Automatic bidirectional syncing between workspace markdown files and Obsidian note graphs (`auto_sync_obsidian_notes`), featuring path-qualified `[[wikilink]]` resolution (`[[projects/Overview]]`), duplicate title ambiguity detection, and diff-based edge preservation.
 
 ### Agent Loop Architecture & Reliability Refactoring (vs. Upstream)
 
@@ -106,10 +109,13 @@ Main file: `config/config.toml`
 
 Important sections:
 
-- `[llm]` model, endpoint, key, token limits
+- `[llm]` model, endpoint, key, token limits (`http://127.0.0.1:1234/v1` by default for local LM Studio)
 - `[sandbox]` runtime limits and network/socket access
 - `[agent]` max steps and tool-call behavior
 - `[rl]` optional policy integration
+
+> [!NOTE]
+> **Dynamic Profile Overrides**: While `config/config.toml` sets the initial static defaults on startup, any connection profile changes (`style`, `base_url`, `model`, `api_key`) saved in the **Admin Settings UI** (`/admin`) are persisted to PostgreSQL (`app_settings`) and serve as the authoritative active connection for all running tasks, background workers, and local FAISS/keyword memory embeddings.
 
 Example RL toggle:
 

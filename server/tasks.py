@@ -79,6 +79,29 @@ def _http_json(
         return json.loads(data.decode("utf-8")) if data else {}
 
 
+def _lmstudio_api_request(
+    method: str,
+    base_url: str,
+    endpoint: str,
+    payload: Optional[dict] = None,
+    token: Optional[str] = None,
+    timeout: int = 10,
+) -> dict:
+    native = _lmstudio_native_base(base_url)
+    if not native:
+        raise ValueError("Invalid lmstudio base_url")
+    url = f"{native.rstrip('/')}/{endpoint.lstrip('/')}"
+    try:
+        return _http_json(method, url, payload=payload, token=token, timeout=timeout)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404 and "/api/v1/" in url:
+            fallback_url = url.replace("/api/v1/", "/api/v0/")
+            return _http_json(
+                method, fallback_url, payload=payload, token=token, timeout=timeout
+            )
+        raise
+
+
 def _connection_candidates(primary: dict) -> list[dict]:
     base = dict(primary or {})
     chain = base.get("fallback_chain", [])
@@ -117,10 +140,9 @@ def _is_connection_healthy(connection: dict, timeout: int = 5) -> tuple[bool, st
         return False, "missing base_url"
     try:
         if api_type in {"lmstudio", "local"}:
-            native = _lmstudio_native_base(base_url)
-            if not native:
-                return False, "invalid lmstudio base_url"
-            _http_json("GET", f"{native}/models", token=api_key, timeout=timeout)
+            _lmstudio_api_request(
+                "GET", base_url, "models", token=api_key, timeout=timeout
+            )
             return True, "lmstudio /models ok"
         # OpenAI-compatible default
         _http_json(
@@ -137,7 +159,19 @@ def _is_connection_healthy(connection: dict, timeout: int = 5) -> tuple[bool, st
 
 
 def resolve_llm_connection(connection: dict, task) -> dict:
-    candidates = _connection_candidates(connection or {})
+    conn = connection or {}
+    if not conn.get("base_url"):
+        try:
+            runtime_conn = get_llm_connection()
+            if (
+                runtime_conn
+                and isinstance(runtime_conn, dict)
+                and runtime_conn.get("base_url")
+            ):
+                conn = {**runtime_conn, **conn}
+        except Exception:
+            pass
+    candidates = _connection_candidates(conn)
     for index, candidate in enumerate(candidates):
         ok, detail = _is_connection_healthy(candidate)
         task.emit(
@@ -214,6 +248,17 @@ def sync_lmstudio_context_window(
         return None
 
     connection = llm_connection or {}
+    if not connection.get("base_url"):
+        try:
+            runtime_conn = get_llm_connection()
+            if (
+                runtime_conn
+                and isinstance(runtime_conn, dict)
+                and runtime_conn.get("base_url")
+            ):
+                connection = {**runtime_conn, **connection}
+        except Exception:
+            pass
     default_llm = config.llm.get("default") if isinstance(config.llm, dict) else None
 
     base_url = str(
@@ -240,9 +285,10 @@ def sync_lmstudio_context_window(
         return None
 
     try:
-        response = _http_json(
+        response = _lmstudio_api_request(
             "POST",
-            f"{native_base}/models/load",
+            base_url,
+            "models/load",
             payload={
                 "model": selected_model,
                 "context_length": int(requested_context_window),
@@ -723,22 +769,34 @@ def auto_sync_obsidian_notes(conversation_id: str, workspace_root: Path) -> None
             if stem.endswith(".md"):
                 stem = stem[:-3]
             all_by_path_stem.setdefault(stem, []).append(note)
+        # Basename lookup: strip directories and .md so [[Overview]] matches "projects/Overview.md"
+        all_by_basename: dict[str, list[ObsidianNoteORM]] = {}
+        for note in all_notes:
+            basename = Path(note.path).stem
+            all_by_basename.setdefault(basename, []).append(note)
         # Title lookup: track duplicates
         all_by_title: dict[str, list[ObsidianNoteORM]] = {}
         for note in all_notes:
             all_by_title.setdefault(note.title, []).append(note)
 
-        touched_note_ids = {note.note_id for note in touched_notes}
+        # Re-evaluate edges for all workspace-synced notes or touched notes to catch newly resolved targets
+        source_notes = [
+            note
+            for note in all_notes
+            if (note.meta or {}).get("source") == "workspace-auto-sync"
+            or note in touched_notes
+        ]
+        source_note_ids = {note.note_id for note in source_notes}
 
-        # Compute desired edges from touched notes
+        # Compute desired edges from source notes
         desired_edges: set[tuple] = set()
-        for note in touched_notes:
+        for note in source_notes:
             content = note.content or ""
             for link in WIKILINK_RE.findall(content):
                 target_name = str(link).strip()
                 if not target_name:
                     continue
-                # Resolution order: path-stem > exact path > unambiguous title
+                # Resolution order: path-stem > basename > exact path > unambiguous title
                 target = None
                 stem_matches = all_by_path_stem.get(target_name, [])
                 if len(stem_matches) == 1:
@@ -746,19 +804,23 @@ def auto_sync_obsidian_notes(conversation_id: str, workspace_root: Path) -> None
                 elif target_name in all_by_path:
                     target = all_by_path[target_name]
                 else:
-                    title_matches = all_by_title.get(target_name, [])
-                    if len(title_matches) == 1:
-                        target = title_matches[0]
-                    # else: ambiguous or not found — skip
+                    base_matches = all_by_basename.get(target_name, [])
+                    if len(base_matches) == 1:
+                        target = base_matches[0]
+                    else:
+                        title_matches = all_by_title.get(target_name, [])
+                        if len(title_matches) == 1:
+                            target = title_matches[0]
+                        # else: ambiguous or not found — skip
                 if target is not None and target.note_id != note.note_id:
                     desired_edges.add((note.note_id, target.note_id, "wikilink"))
 
-        # Query existing edges sourced from touched notes only
+        # Query existing edges sourced from source notes only
         existing_edge_rows = (
             session.query(ObsidianEdgeORM)
             .filter(
                 ObsidianEdgeORM.conversation_id == cid,
-                ObsidianEdgeORM.source_note_id.in_(touched_note_ids),
+                ObsidianEdgeORM.source_note_id.in_(source_note_ids),
             )
             .all()
         )
@@ -929,6 +991,10 @@ def run_task(task_id: str, prompt: Optional[str] = None):
             result = await agent.run(wrapped, run_prompt)
             return result
         finally:
+            try:
+                auto_sync_obsidian_notes(conversation_id, workspace_root)
+            except Exception as exc:
+                logger.warning(f"Post-task obsidian sync failed: {exc}")
             current_task.reset(token)
             if sandbox_token is not None:
                 current_sandbox.reset(sandbox_token)

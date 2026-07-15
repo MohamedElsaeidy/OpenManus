@@ -176,12 +176,48 @@ export async function listConversations(): Promise<{ conversations: Conversation
   return response.json();
 }
 
-export async function createConversation(title = 'New conversation', model?: string): Promise<Conversation> {
+export function getActiveConnectionPayload(selectedModel?: string): Record<string, unknown> | undefined {
+  try {
+    const rawProfiles = localStorage.getItem('openmanus.connection.profiles');
+    const activeId = localStorage.getItem('openmanus.connection.activeProfileId') || 'default';
+    if (!rawProfiles) return undefined;
+    const profiles = JSON.parse(rawProfiles);
+    const activeProfile = Array.isArray(profiles)
+      ? profiles.find((p: any) => p.id === activeId) || profiles[0]
+      : null;
+    if (!activeProfile) return undefined;
+
+    const styleToApiType: Record<string, string> = {
+      'lm-studio': 'lmstudio',
+      'ollama': 'ollama',
+      'openai': 'openai',
+      'custom': 'custom',
+    };
+    const api_type = styleToApiType[activeProfile.style] || activeProfile.style || 'lmstudio';
+    let base_url = activeProfile.host || '';
+    if (!base_url) {
+      if (activeProfile.style === 'lm-studio') base_url = 'http://127.0.0.1:1234';
+      else if (activeProfile.style === 'ollama') base_url = 'http://127.0.0.1:11434';
+      else if (activeProfile.style === 'openai') base_url = 'https://api.openai.com/v1';
+    }
+    return {
+      base_url,
+      api_key: activeProfile.apiKey || '',
+      api_type,
+      model: selectedModel || activeProfile.defaultModel || localStorage.getItem('openmanus.selectedModel') || '',
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+export async function createConversation(title = 'New conversation', model?: string, llm_connection?: Record<string, unknown>): Promise<Conversation> {
+  const payloadConnection = llm_connection || getActiveConnectionPayload(model);
   const response = await fetch('/api/conversations', {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title, model }),
+    body: JSON.stringify({ title, model, llm_connection: payloadConnection }),
   });
   if (!response.ok) throw new Error('Could not create conversation');
   return response.json();
@@ -320,12 +356,14 @@ export async function sendConversationMessage(
   conversationId: string,
   message: string,
   model?: string,
+  llm_connection?: Record<string, unknown>,
 ): Promise<{ conversation_id: string; task_id: string; queued: boolean; created_task: boolean }> {
+  const payloadConnection = llm_connection || getActiveConnectionPayload(model);
   const response = await fetch(`/api/conversations/${conversationId}/messages`, {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, model }),
+    body: JSON.stringify({ message, model, llm_connection: payloadConnection }),
   });
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));
@@ -354,13 +392,15 @@ export async function updateConversationSettings(
     pinned_skills?: string[];
     identity_notes?: string;
     auto_skill_curator?: boolean;
+    llm_connection?: Record<string, unknown>;
   },
 ): Promise<Conversation> {
+  const payloadConnection = settings.llm_connection || getActiveConnectionPayload(settings.model);
   const response = await fetch(`/api/conversations/${conversationId}/settings`, {
     method: 'PUT',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(settings),
+    body: JSON.stringify({ ...settings, llm_connection: payloadConnection }),
   });
   if (!response.ok) throw new Error('Could not update conversation settings');
   return response.json();

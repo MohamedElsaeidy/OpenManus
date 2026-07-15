@@ -29,6 +29,8 @@ class FakeNote:
 
 def resolve_wikilink(target_name: str, all_notes: list[FakeNote]) -> FakeNote | None:
     """Replicate the fixed resolution logic from auto_sync_obsidian_notes."""
+    from pathlib import Path
+
     # Build lookup dicts
     all_by_path = {note.path: note for note in all_notes}
 
@@ -39,16 +41,24 @@ def resolve_wikilink(target_name: str, all_notes: list[FakeNote]) -> FakeNote | 
             stem = stem[:-3]
         all_by_path_stem[stem].append(note)
 
+    all_by_basename: dict[str, list[FakeNote]] = defaultdict(list)
+    for note in all_notes:
+        basename = Path(note.path).stem
+        all_by_basename[basename].append(note)
+
     all_by_title: dict[str, list[FakeNote]] = defaultdict(list)
     for note in all_notes:
         all_by_title[note.title].append(note)
 
-    # Resolution order: path-stem > exact path > unambiguous title
+    # Resolution order: path-stem > basename > exact path > unambiguous title
     stem_matches = all_by_path_stem.get(target_name, [])
     if len(stem_matches) == 1:
         return stem_matches[0]
     if target_name in all_by_path:
         return all_by_path[target_name]
+    base_matches = all_by_basename.get(target_name, [])
+    if len(base_matches) == 1:
+        return base_matches[0]
     title_matches = all_by_title.get(target_name, [])
     if len(title_matches) == 1:
         return title_matches[0]
@@ -229,3 +239,31 @@ class TestWikilinkRegex:
     def test_multiple_links(self):
         text = "See [[A]] and [[B]] and [[C]]"
         assert WIKILINK_RE.findall(text) == ["A", "B", "C"]
+
+
+# --------------------------------------------------------------------------
+# Basename resolution tests
+# --------------------------------------------------------------------------
+
+
+class TestBasenameResolution:
+    """[[Overview]] should resolve to 'projects/Overview.md' via basename matching when unambiguous."""
+
+    def test_basename_resolves_nested_file(self):
+        note_a = FakeNote(
+            "note-A",
+            "projects/Overview.md",
+            "Long Heading Title",
+        )
+        note_b = FakeNote(
+            "note-B", "notes/index.md", "Index", content="See [[Overview]]"
+        )
+        result = resolve_wikilink("Overview", [note_a, note_b])
+        assert result is not None, "Basename match should resolve across nested folder"
+        assert result.note_id == "note-A"
+
+    def test_basename_collision_ambiguous_skips(self):
+        note_a = FakeNote("note-A", "projects/Overview.md", "Project Overview")
+        note_b = FakeNote("note-B", "docs/Overview.md", "Docs Overview")
+        result = resolve_wikilink("Overview", [note_a, note_b])
+        assert result is None, "Basename collision should skip resolution"

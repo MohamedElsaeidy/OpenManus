@@ -1,11 +1,11 @@
-// 临时的tasks actions文件，用于解决导入错误
-// 实际实现需要根据后端API进行调整
+import { getActiveConnectionPayload } from './conversations';
 
 export interface CreateTaskParams {
   taskId?: string;
   conversationId?: string;
   model?: string;
   prompt: string;
+  llm_connection?: Record<string, unknown>;
 }
 
 export interface Task {
@@ -62,6 +62,10 @@ export async function createTask(
     }
     if (params.model) {
       formData.append('model', params.model);
+    }
+    const connectionPayload = params.llm_connection || getActiveConnectionPayload(params.model);
+    if (connectionPayload) {
+      formData.append('llm_connection', JSON.stringify(connectionPayload));
     }
     formData.append('prompt', params.prompt);
 

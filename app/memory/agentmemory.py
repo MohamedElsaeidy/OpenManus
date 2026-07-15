@@ -103,17 +103,23 @@ class AgentMemoryClient:
         api_key = getattr(self.settings, "embedding_api_key", "").strip()
 
         if not base_url or not api_key:
+            try:
+                from app.task_context import get_current_llm_connection
+
+                active_conn = get_current_llm_connection() or {}
+            except Exception:
+                active_conn = {}
             default_llm = (
                 config.llm.get("default") if isinstance(config.llm, dict) else None
             )
             if not base_url:
-                base_url = (
+                base_url = active_conn.get("base_url") or (
                     getattr(default_llm, "base_url", "http://localhost:1234/v1")
                     if default_llm
                     else "http://localhost:1234/v1"
                 )
             if not api_key:
-                api_key = (
+                api_key = active_conn.get("api_key") or (
                     getattr(default_llm, "api_key", "lm-studio")
                     if default_llm
                     else "lm-studio"

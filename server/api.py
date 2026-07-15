@@ -507,11 +507,9 @@ def _llm_connection_health(session) -> dict:
     token = str(connection.get("api_key") or "").strip() or None
     try:
         if api_type in {"lmstudio", "local"}:
-            native = _lmstudio_native_base(base_url)
-            if not native:
-                payload["reason"] = "Invalid LM Studio URL"
-                return payload
-            data = _http_json("GET", f"{native}/models", token=token)
+            data = _lmstudio_api_request(
+                "GET", base_url, "/models", token=token, timeout=8
+            )
         else:
             models_url = (
                 base_url.rstrip("/") + "/models"
@@ -647,6 +645,63 @@ def _lmstudio_native_base(base_url: str) -> Optional[str]:
         return None
     root = f"{parsed.scheme}://{parsed.netloc}"
     return f"{root}/api/v1"
+
+
+def _lmstudio_api_request(
+    method: str,
+    base_url: str,
+    subpath: str,
+    payload: Optional[dict] = None,
+    token: Optional[str] = None,
+    timeout: int = 30,
+) -> dict:
+    try:
+        parsed = urlparse.urlparse(base_url.strip())
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid LM Studio host URL")
+    if not parsed.scheme or not parsed.netloc:
+        raise HTTPException(status_code=400, detail="Invalid LM Studio host URL")
+    root = f"{parsed.scheme}://{parsed.netloc}"
+    subpath = subpath if subpath.startswith("/") else f"/{subpath}"
+
+    last_exc = None
+    for prefix in ["/api/v1", "/api/v0"]:
+        url = f"{root}{prefix}{subpath}"
+        try:
+            return _http_json(
+                method, url, payload=payload, token=token, timeout=timeout
+            )
+        except urlerror.HTTPError as exc:
+            last_exc = exc
+            detail = ""
+            try:
+                detail = (
+                    exc.read().decode("utf-8", errors="ignore")
+                    if hasattr(exc, "read")
+                    else ""
+                )
+            except Exception:
+                pass
+            if (
+                exc.code == 404
+                or "Unexpected endpoint or method" in detail
+                or "Unexpected endpoint" in detail
+            ):
+                if prefix == "/api/v1":
+                    continue
+            if detail:
+                raise HTTPException(status_code=exc.code, detail=detail) from exc
+            raise
+        except Exception as exc:
+            last_exc = exc
+            if prefix == "/api/v1":
+                continue
+            raise
+    if isinstance(last_exc, HTTPException):
+        raise last_exc
+    raise HTTPException(
+        status_code=502, detail=f"LM Studio API request failed: {last_exc}"
+    )
 
 
 def _http_json(
@@ -1161,7 +1216,9 @@ async def list_models(request: Request):
             or "1234" in base_url
             or "lmstudio" in base_url.lower()
         ):
-            listing = _http_json("GET", f"{native_base}/models", token=api_key or None)
+            listing = _lmstudio_api_request(
+                "GET", base_url, "/models", token=api_key or None, timeout=8
+            )
             lm_models = listing.get("data") if isinstance(listing, dict) else []
             if isinstance(lm_models, list):
                 for item in lm_models:
@@ -1220,13 +1277,9 @@ async def query_models(request: Request):
     url = ""
     try:
         if style == "lm-studio":
-            native = _lmstudio_native_base(host)
-            if not native:
-                raise HTTPException(
-                    status_code=400, detail="Invalid LM Studio host URL"
-                )
-            url = f"{native}/models"
-            data = _http_json("GET", url, token=api_key, timeout=8)
+            data = _lmstudio_api_request(
+                "GET", host, "/models", token=api_key, timeout=8
+            )
             rows = _extract_model_rows(data)
             for item in rows:
                 if not isinstance(item, dict):
@@ -1373,12 +1426,13 @@ async def load_model(request: Request):
             )
 
     try:
-        data = _http_json(
+        data = _lmstudio_api_request(
             "POST",
-            f"{native}/models/load",
+            host,
+            "/models/load",
             payload=payload,
             token=api_key,
-            timeout=30,
+            timeout=60,
         )
         return {"ok": True, "result": data}
     except urlerror.HTTPError as exc:
@@ -1401,20 +1455,40 @@ async def eject_model(request: Request):
     with registry.SessionLocal() as session:
         connection = _effective_llm_connection(session)
 
-    base_url = str(connection.get("base_url") or "")
-    api_type = str(connection.get("api_type") or "").lower()
-    api_key = str(connection.get("api_key") or "")
+    base_url = str(
+        (body or {}).get("host")
+        or (body or {}).get("base_url")
+        or connection.get("base_url")
+        or ""
+    ).strip()
+    api_type = (
+        str(
+            (body or {}).get("style")
+            or (body or {}).get("api_type")
+            or connection.get("api_type")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
+    api_key = str(
+        (body or {}).get("api_key") or connection.get("api_key") or ""
+    ).strip()
 
-    native_base = _lmstudio_native_base(base_url)
-    if not native_base:
+    if not base_url:
         raise HTTPException(status_code=400, detail="LLM base_url is not configured")
-    if api_type not in {"openai", "lmstudio", "local"} and "1234" not in base_url:
+    if (
+        api_type not in {"openai", "lmstudio", "lm-studio", "local"}
+        and "1234" not in base_url
+    ):
         raise HTTPException(
             status_code=400, detail="Eject is only supported for LM Studio connections"
         )
 
     try:
-        listing = _http_json("GET", f"{native_base}/models", token=api_key)
+        listing = _lmstudio_api_request(
+            "GET", base_url, "/models", token=api_key, timeout=8
+        )
         models = listing.get("data") if isinstance(listing, dict) else []
         if not isinstance(models, list):
             models = []
@@ -1444,7 +1518,11 @@ async def eject_model(request: Request):
             (
                 m
                 for m in models
-                if isinstance(m, dict) and str(m.get("id") or "") == target_instance_id
+                if isinstance(m, dict)
+                and (
+                    str(m.get("id") or "") == target_instance_id
+                    or str(m.get("instance_id") or "") == target_instance_id
+                )
             ),
             None,
         )
@@ -1453,11 +1531,13 @@ async def eject_model(request: Request):
                 exact.get("instance_id") or exact.get("id") or target_instance_id
             )
 
-        unloaded = _http_json(
+        unloaded = _lmstudio_api_request(
             "POST",
-            f"{native_base}/models/unload",
+            base_url,
+            "/models/unload",
             payload={"instance_id": instance_id},
             token=api_key,
+            timeout=15,
         )
         return {
             "ok": True,
@@ -1466,16 +1546,42 @@ async def eject_model(request: Request):
             if isinstance(unloaded, dict)
             else instance_id,
         }
-    except HTTPException:
-        raise
-    except urlerror.HTTPError as exc:
-        detail_raw = exc.read().decode("utf-8", errors="ignore")
-        # Idempotent behavior: unloading an already-unloaded model should not fail UX.
+    except HTTPException as exc:
+        detail_raw = str(exc.detail or "")
         try:
-            parsed = json.loads(detail_raw) if detail_raw else {}
+            parsed = (
+                json.loads(detail_raw)
+                if detail_raw and detail_raw.startswith("{")
+                else {}
+            )
             err = parsed.get("error") if isinstance(parsed, dict) else None
             err_type = str((err or {}).get("type") or "")
-            if err_type == "model_not_found":
+            if err_type == "model_not_found" or exc.status_code == 404:
+                return {
+                    "ok": True,
+                    "requested_model": requested_model or "",
+                    "instance_id": requested_model or "",
+                    "already_unloaded": True,
+                }
+        except Exception:
+            pass
+        raise
+    except urlerror.HTTPError as exc:
+        detail_raw = ""
+        try:
+            detail_raw = (
+                exc.read().decode("utf-8", errors="ignore")
+                if hasattr(exc, "read")
+                else ""
+            )
+            parsed = (
+                json.loads(detail_raw)
+                if detail_raw and detail_raw.startswith("{")
+                else {}
+            )
+            err = parsed.get("error") if isinstance(parsed, dict) else None
+            err_type = str((err or {}).get("type") or "")
+            if err_type == "model_not_found" or exc.code == 404:
                 return {
                     "ok": True,
                     "requested_model": requested_model or "",
@@ -1510,14 +1616,10 @@ async def verify_connection(request: Request):
 
     # Build URL from host + style/path
     if style == "lm-studio":
-        native = _lmstudio_native_base(host)
-        if not native:
-            raise HTTPException(status_code=400, detail="Invalid LM Studio host URL")
-        url = f"{native}/models"
+        data = _lmstudio_api_request("GET", host, "/models", token=api_key, timeout=8)
+        count = len(_extract_model_rows(data))
+        return {"ok": True, "url": host, "models_count": count}
     elif style in {"openai", "ollama"}:
-        suffix = "/v1/models"
-        url = host.rstrip("/") + suffix
-    else:
         suffix = models_path or "/v1/models"
         if not suffix.startswith("/"):
             suffix = "/" + suffix
@@ -1841,17 +1943,23 @@ async def create_conversation(request: Request):
     user = _require_user(request)
     title = "New conversation"
     model = None
+    llm_connection = None
     try:
         body = await request.json()
         title = str(body.get("title") or title).strip() or title
         model = str(body.get("model") or "").strip() or None
+        if isinstance(body.get("llm_connection"), dict):
+            llm_connection = body.get("llm_connection")
     except Exception:
         pass
     with registry.SessionLocal() as session:
+        settings = {"llm_connection": llm_connection} if llm_connection else {}
         conversation = ConversationORM(
-            user_id=user.user_id, title=title[:120], model=model
+            user_id=user.user_id, title=title[:120], model=model, settings=settings
         )
         session.add(conversation)
+        if llm_connection:
+            _set_app_setting(session, "llm_connection", llm_connection)
         session.commit()
         session.refresh(conversation)
         return _conversation_to_dict(session, conversation)
@@ -2035,6 +2143,11 @@ async def import_obsidian_context(request: Request, conversation_id: str):
             if stem.endswith(".md"):
                 stem = stem[:-3]
             all_by_path_stem.setdefault(stem, []).append(note)
+        # Basename lookup: strip directories and .md so [[Overview]] matches "projects/Overview.md"
+        all_by_basename: dict[str, list[ObsidianNoteORM]] = {}
+        for note in all_notes:
+            basename = Path(note.path).stem
+            all_by_basename.setdefault(basename, []).append(note)
         # Title lookup: track duplicates for disambiguation
         all_by_title: dict[str, list[ObsidianNoteORM]] = {}
         for note in all_notes:
@@ -2048,7 +2161,7 @@ async def import_obsidian_context(request: Request, conversation_id: str):
             for target_name in _extract_wikilinks(note.content):
                 if not target_name:
                     continue
-                # Resolution order: path-stem > exact path > unambiguous title
+                # Resolution order: path-stem > basename > exact path > unambiguous title
                 target = None
                 stem_matches = all_by_path_stem.get(target_name, [])
                 if len(stem_matches) == 1:
@@ -2056,10 +2169,14 @@ async def import_obsidian_context(request: Request, conversation_id: str):
                 elif target_name in all_by_path:
                     target = all_by_path[target_name]
                 else:
-                    title_matches = all_by_title.get(target_name, [])
-                    if len(title_matches) == 1:
-                        target = title_matches[0]
-                    # else: ambiguous or not found — skip
+                    base_matches = all_by_basename.get(target_name, [])
+                    if len(base_matches) == 1:
+                        target = base_matches[0]
+                    else:
+                        title_matches = all_by_title.get(target_name, [])
+                        if len(title_matches) == 1:
+                            target = title_matches[0]
+                        # else: ambiguous or not found — skip
                 if target is not None and target.note_id != note.note_id:
                     desired_edges.add((note.note_id, target.note_id, "wikilink"))
 
@@ -2111,6 +2228,13 @@ async def import_obsidian_context(request: Request, conversation_id: str):
 @app.get("/api/conversations/{conversation_id}/obsidian/graph")
 async def get_obsidian_graph(request: Request, conversation_id: str):
     user = _require_user(request)
+    workspace_path = Path(WORKSPACE_ROOT) / "conversations" / str(conversation_id)
+    try:
+        from server.tasks import auto_sync_obsidian_notes
+
+        auto_sync_obsidian_notes(conversation_id, workspace_path)
+    except Exception as exc:
+        logger.warning(f"Failed to auto-sync obsidian notes on graph query: {exc}")
     with registry.SessionLocal() as session:
         conversation = _require_conversation(session, user.user_id, conversation_id)
         return {
@@ -2122,6 +2246,13 @@ async def get_obsidian_graph(request: Request, conversation_id: str):
 @app.get("/api/conversations/{conversation_id}/obsidian/context")
 async def get_obsidian_context(request: Request, conversation_id: str, limit: int = 8):
     user = _require_user(request)
+    workspace_path = Path(WORKSPACE_ROOT) / "conversations" / str(conversation_id)
+    try:
+        from server.tasks import auto_sync_obsidian_notes
+
+        auto_sync_obsidian_notes(conversation_id, workspace_path)
+    except Exception as exc:
+        logger.warning(f"Failed to auto-sync obsidian notes on context query: {exc}")
     with registry.SessionLocal() as session:
         conversation = _require_conversation(session, user.user_id, conversation_id)
         notes = (
@@ -2390,6 +2521,9 @@ async def update_conversation_settings(request: Request, conversation_id: str):
             settings["identity_notes"] = str(body.get("identity_notes") or "").strip()
         if "auto_skill_curator" in body:
             settings["auto_skill_curator"] = bool(body.get("auto_skill_curator"))
+        if isinstance(body.get("llm_connection"), dict):
+            settings["llm_connection"] = body.get("llm_connection")
+            _set_app_setting(session, "llm_connection", body.get("llm_connection"))
         conversation.settings = settings
         conversation.updated_at = _now()
         session.commit()
@@ -2645,9 +2779,22 @@ async def create_task(
     task_id: Optional[str] = Form(None),
     conversation_id: Optional[str] = Form(None),
     model: Optional[str] = Form(None),
+    llm_connection: Optional[str] = Form(None),
 ):
     """Create a new task, or queue a follow-up run on an existing task."""
     user = _require_user(request)
+    parsed_connection = None
+    if llm_connection:
+        try:
+            parsed_connection = (
+                json.loads(llm_connection)
+                if isinstance(llm_connection, str)
+                else llm_connection
+            )
+            if not isinstance(parsed_connection, dict):
+                parsed_connection = None
+        except Exception:
+            parsed_connection = None
 
     if task_id:
         # Check if this task already exists (follow-up message in a conversation)
@@ -2664,6 +2811,15 @@ async def create_task(
                 conversation = session.get(
                     ConversationORM, uuid.UUID(str(conversation_id))
                 )
+                if parsed_connection and conversation is not None:
+                    if not isinstance(conversation.settings, dict):
+                        conversation.settings = {}
+                    conversation.settings = {
+                        **conversation.settings,
+                        "llm_connection": parsed_connection,
+                    }
+                    _set_app_setting(session, "llm_connection", parsed_connection)
+                    session.commit()
                 conversation_settings = (
                     conversation.settings if conversation is not None else {}
                 )
@@ -2786,6 +2942,14 @@ async def create_task(
             conversation = _require_conversation(session, user.user_id, conversation_id)
         else:
             conversation = _ensure_default_conversation(session, user.user_id)
+        if parsed_connection and conversation is not None:
+            if not isinstance(conversation.settings, dict):
+                conversation.settings = {}
+            conversation.settings = {
+                **conversation.settings,
+                "llm_connection": parsed_connection,
+            }
+            _set_app_setting(session, "llm_connection", parsed_connection)
         if prompt and conversation.title == "New conversation":
             conversation.title = (
                 prompt.strip().splitlines()[0][:80] or conversation.title
@@ -2885,11 +3049,24 @@ async def send_conversation_message(request: Request, conversation_id: str):
     body = await request.json()
     message = str(body.get("message") or body.get("prompt") or "").strip()
     requested_model = str(body.get("model") or "").strip() or None
+    llm_connection = (
+        body.get("llm_connection")
+        if isinstance(body.get("llm_connection"), dict)
+        else None
+    )
     if not message:
         raise HTTPException(status_code=400, detail="Message is required")
 
     with registry.SessionLocal() as session:
         conversation = _require_conversation(session, user.user_id, conversation_id)
+        if llm_connection:
+            if not isinstance(conversation.settings, dict):
+                conversation.settings = {}
+            conversation.settings = {
+                **conversation.settings,
+                "llm_connection": llm_connection,
+            }
+            _set_app_setting(session, "llm_connection", llm_connection)
         active_task = next(
             (
                 task

@@ -28,6 +28,7 @@ import AuthPage from '@/pages/AuthPage';
 import ConversationSettingsPage from '@/pages/ConversationSettingsPage';
 import HomePage from '@/pages/HomePage';
 import TaskDetailPage from '@/pages/TaskDetailPage';
+import { getAdminSettings, updateAdminSettings } from '@/services/admin';
 import { getMe, logout, type User } from '@/services/auth';
 import { deleteConversation, updateConversationSettings } from '@/services/conversations';
 import { ejectModel, listModels, loadModel, queryModels, type ModelOption } from '@/services/models';
@@ -110,6 +111,33 @@ function loadProfilesFromStorage(): ConnectionProfile[] {
     return parsed;
   } catch {
     return [DEFAULT_PROFILE];
+  }
+}
+
+async function syncActiveProfileToBackend(profile: ConnectionProfile, model?: string) {
+  try {
+    const adminSettings = await getAdminSettings().catch(() => null);
+    if (!adminSettings) return;
+    const styleToApiType: Record<string, string> = {
+      'lm-studio': 'lmstudio',
+      'ollama': 'ollama',
+      'openai': 'openai',
+      'custom': 'custom',
+    };
+    const api_type = styleToApiType[profile.style] || profile.style || 'lmstudio';
+    await updateAdminSettings({
+      llm_connection: {
+        ...adminSettings.llm_connection,
+        base_url: profile.host || styleDefaultHost(profile.style),
+        api_key: profile.apiKey || '',
+        api_type,
+        model: model || profile.defaultModel || adminSettings.llm_connection?.model || '',
+      },
+      tools: adminSettings.tools || { disabled: [] },
+      config_overrides: adminSettings.config_overrides || {},
+    });
+  } catch (err) {
+    console.warn('Could not sync active profile to backend:', err);
   }
 }
 
@@ -268,9 +296,13 @@ function App() {
       if (initial && items.some(model => model.id === initial)) {
         setSelectedModel(initial);
         localStorage.setItem(STORAGE.selectedModel, initial);
+        syncActiveProfileToBackend(activeProfile, initial);
       } else if (items[0]?.id) {
         setSelectedModel(items[0].id);
         localStorage.setItem(STORAGE.selectedModel, items[0].id);
+        syncActiveProfileToBackend(activeProfile, items[0].id);
+      } else {
+        syncActiveProfileToBackend(activeProfile, selectedModel || activeProfile.defaultModel);
       }
     });
   }, [user, refreshConversations, activeProfile, activeProfile.defaultModel, selectedModel]);
@@ -353,7 +385,12 @@ function App() {
     if (isEjectingModel) return;
     setIsEjectingModel(true);
     try {
-      const res = await ejectModel(selectedModel || undefined);
+      const res = await ejectModel({
+        model: selectedModel || undefined,
+        host: activeProfile.host || styleDefaultHost(activeProfile.style),
+        api_key: activeProfile.apiKey || '',
+        style: activeProfile.style,
+      });
       if (!res.ok) {
         toast.error(res.detail || 'Could not eject model');
         return;
@@ -417,8 +454,21 @@ function App() {
       setSelectedModel(defaultModelDraft);
       localStorage.setItem(STORAGE.selectedModel, defaultModelDraft);
     }
+    const updatedProfile = {
+      ...activeProfile,
+      host: connectionHostDraft,
+      apiKey: connectionApiKeyDraft,
+      style: connectionStyleDraft,
+      chatPath: connectionChatPathDraft,
+      modelsPath: connectionModelsPathDraft,
+      loadPath: connectionLoadPathDraft,
+      unloadPath: connectionUnloadPathDraft,
+      defaultModel: defaultModelDraft,
+      defaultContextWindow: defaultContextWindowDraft,
+    };
+    syncActiveProfileToBackend(updatedProfile, defaultModelDraft || selectedModel);
     setIsConnectionSettingsOpen(false);
-    toast.success('Profile saved');
+    toast.success('Profile saved and synced to backend');
   };
 
   const createProfileFromDraft = () => {
@@ -444,7 +494,8 @@ function App() {
     setProfiles(prev => [profile, ...prev]);
     setActiveProfileId(id);
     setNewProfileName('');
-    toast.success('Profile created');
+    syncActiveProfileToBackend(profile, defaultModelDraft || selectedModel);
+    toast.success('Profile created and synced to backend');
   };
 
   const deleteActiveProfile = () => {
@@ -466,7 +517,8 @@ function App() {
       const items = await fetchModelsForProfile(target);
       setModels(items);
       setActiveProfileId(pendingProfileId);
-      toast.success('Profile selected and models refreshed');
+      syncActiveProfileToBackend(target, selectedModel || target.defaultModel);
+      toast.success('Profile selected, models refreshed, and backend synced');
     } catch {
       toast.error('Profile selected, but model refresh failed');
     }
@@ -576,8 +628,10 @@ function App() {
                     className="h-9 min-w-0 flex-1 rounded-md border bg-background px-2 text-sm"
                     value={selectedModel}
                     onChange={event => {
-                      setSelectedModel(event.target.value);
-                      localStorage.setItem(STORAGE.selectedModel, event.target.value);
+                      const nextModel = event.target.value;
+                      setSelectedModel(nextModel);
+                      localStorage.setItem(STORAGE.selectedModel, nextModel);
+                      syncActiveProfileToBackend(activeProfile, nextModel);
                     }}
                   >
                     {groupedFilteredModels.map(([base, variants]) => (

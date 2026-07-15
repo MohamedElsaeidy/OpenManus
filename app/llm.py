@@ -7,8 +7,11 @@ from openai import (
     AsyncAzureOpenAI,
     AsyncOpenAI,
     AuthenticationError,
+    BadRequestError,
+    NotFoundError,
     OpenAIError,
     RateLimitError,
+    UnprocessableEntityError,
 )
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from tenacity import (
@@ -88,12 +91,35 @@ def _is_local_server(base_url: str) -> bool:
 
 def _should_retry_llm_exception(exc: Exception) -> bool:
     """Retry transient provider failures only."""
-    if isinstance(exc, (TokenLimitExceeded, ValueError)):
+    if isinstance(
+        exc,
+        (
+            TokenLimitExceeded,
+            ValueError,
+            BadRequestError,
+            NotFoundError,
+            UnprocessableEntityError,
+        ),
+    ):
         return False
     text = str(exc).lower()
-    if "no user query found in messages" in text:
+    if "no user query found" in text or "user query" in text:
         return False
-    if "jinja template" in text and "prompt template" in text:
+    if (
+        "jinja template" in text
+        or "prompt template" in text
+        or "template error" in text
+        or "error rendering chat template" in text
+    ):
+        return False
+    if (
+        "tools are not supported" in text
+        or "tool calling is not supported" in text
+        or "does not support tool" in text
+        or "function calling is not supported" in text
+        or "invalid parameter: tools" in text
+        or "unknown parameter: tools" in text
+    ):
         return False
     return isinstance(exc, (RateLimitError, APIError, OpenAIError))
 
@@ -765,6 +791,56 @@ class LLM:
 
         return flattened
 
+    @staticmethod
+    def normalize_system_messages(
+        messages: List[dict], merge_leading: bool = False
+    ) -> List[dict]:
+        """Ensure all system messages appear exclusively at the start of the transcript.
+
+        Many local model chat templates (e.g., in LM Studio, Llama 3, Mistral, Qwen)
+        raise a Jinja template error ('System message must be at the beginning.') if a
+        message with role='system' appears after any user, assistant, or tool message.
+        """
+        if not messages:
+            return messages
+
+        leading_system: list[dict] = []
+        body_messages: list[dict] = []
+        seen_non_system = False
+
+        for msg in messages:
+            role = msg.get("role")
+            if role == "system" and not seen_non_system:
+                leading_system.append(msg)
+            elif role == "system" and seen_non_system:
+                content = msg.get("content") or ""
+                body_messages.append(
+                    {
+                        **msg,
+                        "role": "user",
+                        "content": f"[System Context / Memory Summary]\n{content}"
+                        if not str(content).startswith("[System")
+                        else content,
+                    }
+                )
+            else:
+                seen_non_system = True
+                body_messages.append(msg)
+
+        if merge_leading and len(leading_system) > 1:
+            merged_content = "\n\n---\n\n".join(
+                str(msg.get("content") or "").strip()
+                for msg in leading_system
+                if (msg.get("content") or "").strip()
+            )
+            leading_system = (
+                [{"role": "system", "content": merged_content}]
+                if merged_content
+                else []
+            )
+
+        return leading_system + body_messages
+
     @retry(
         wait=wait_random_exponential(min=1, max=60),
         stop=stop_after_attempt(6),
@@ -806,6 +882,10 @@ class LLM:
                 messages = system_msgs + self.format_messages(messages, supports_images)
             else:
                 messages = self.format_messages(messages, supports_images)
+
+            messages = self.normalize_system_messages(
+                messages, merge_leading=self.needs_local_template_compat()
+            )
 
             # Calculate input token count
             input_tokens = self.count_message_tokens(messages)
@@ -1100,9 +1180,29 @@ class LLM:
 
         def _is_template_user_query_error(exc: Exception) -> bool:
             text = _template_error_text(exc)
-            return "no user query found in messages" in text or (
-                "jinja template" in text and "prompt template" in text
-            )
+            if "no user query found" in text or "user query" in text:
+                return True
+            if (
+                "jinja template" in text
+                or "jinja exception" in text
+                or "prompt template" in text
+                or "for this template" in text
+                or "template error" in text
+                or "error rendering chat template" in text
+                or "system message must be at the beginning" in text
+                or "automatic parser generation failed" in text
+            ):
+                return True
+            if (
+                "tools are not supported" in text
+                or "tool calling is not supported" in text
+                or "does not support tool" in text
+                or "function calling is not supported" in text
+                or "invalid parameter: tools" in text
+                or "unknown parameter: tools" in text
+            ):
+                return True
+            return False
 
         def _build_template_fallback_messages(
             source_messages: List[dict],
@@ -1146,6 +1246,10 @@ class LLM:
             if self.needs_local_template_compat():
                 messages = self.flatten_tool_history_for_templates(messages)
                 messages = self.ensure_user_query(messages)
+
+            messages = self.normalize_system_messages(
+                messages, merge_leading=self.needs_local_template_compat()
+            )
 
             # Calculate input token count
             input_tokens = self.count_message_tokens(messages)

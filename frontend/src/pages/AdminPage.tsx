@@ -211,7 +211,7 @@ export default function AdminPage() {
                 value={fallbackChainText}
                 onChange={event => setFallbackChainText(event.target.value)}
                 placeholder={`[
-  { "api_type": "lmstudio", "base_url": "http://10.153.2.8:1234", "model": "qwen3.5" },
+  { "api_type": "lmstudio", "base_url": "http://127.0.0.1:1234", "model": "qwen3.5" },
   { "api_type": "openai", "base_url": "https://api.openai.com/v1", "model": "gpt-4o-mini" }
 ]`}
               />
