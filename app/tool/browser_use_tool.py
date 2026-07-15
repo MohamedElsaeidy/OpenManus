@@ -61,9 +61,29 @@ Note: When using element indices, refer to the numbered elements shown in the cu
 Context = TypeVar("Context")
 
 
+class ManagedCloakBrowser(BrowserUseBrowser):
+    """Launch CloakBrowser through Playwright so its process is owned and closed."""
+
+    async def _setup_browser_with_instance(self, playwright):
+        return await playwright.chromium.launch(
+            executable_path=self.config.chrome_instance_path,
+            headless=self.config.headless,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-blink-features=AutomationControlled",
+                *self.disable_security_args,
+                *self.config.extra_chromium_args,
+            ],
+            proxy=self.config.proxy,
+        )
+
+
 class BrowserUseTool(BaseTool, Generic[Context]):
     name: str = "browser_use"
     description: str = _BROWSER_DESCRIPTION
+    can_retry: bool = False
     parameters: dict = {
         "type": "object",
         "properties": {
@@ -151,6 +171,7 @@ class BrowserUseTool(BaseTool, Generic[Context]):
     context: Optional[BrowserContext] = Field(default=None, exclude=True)
     dom_service: Optional[DomService] = Field(default=None, exclude=True)
     web_search_tool: WebSearch = Field(default_factory=WebSearch, exclude=True)
+    _initialization_error: Optional[str] = None
 
     # Context for generic functionality
     tool_context: Optional[Context] = Field(default=None, exclude=True)
@@ -170,8 +191,12 @@ class BrowserUseTool(BaseTool, Generic[Context]):
         patches, passes 30/30 bot detection tests) over stock Playwright Chromium.
         Falls back to stock Playwright if CloakBrowser is unavailable.
         """
+        if self._initialization_error:
+            raise RuntimeError(self._initialization_error)
+
         if self.browser is None:
             browser_config_kwargs: dict = {"headless": True, "disable_security": True}
+            browser_class = BrowserUseBrowser
 
             if config.browser_config:
                 from browser_use.browser.browser import ProxySettings
@@ -207,6 +232,7 @@ class BrowserUseTool(BaseTool, Generic[Context]):
             ):
                 cloak_path = _get_cloak_binary_path()
                 if cloak_path:
+                    browser_class = ManagedCloakBrowser
                     browser_config_kwargs["chrome_instance_path"] = cloak_path
                     logger.info(
                         f"BrowserUseTool: using CloakBrowser stealth binary → {cloak_path}"
@@ -216,7 +242,7 @@ class BrowserUseTool(BaseTool, Generic[Context]):
                         "BrowserUseTool: CloakBrowser not available, using stock Playwright Chromium"
                     )
 
-            self.browser = BrowserUseBrowser(BrowserConfig(**browser_config_kwargs))
+            self.browser = browser_class(BrowserConfig(**browser_config_kwargs))
 
         if self.context is None:
             context_config = BrowserContextConfig()
@@ -229,8 +255,24 @@ class BrowserUseTool(BaseTool, Generic[Context]):
             ):
                 context_config = config.browser_config.new_context_config
 
-            self.context = await self.browser.new_context(context_config)
-            self.dom_service = DomService(await self.context.get_current_page())
+            try:
+                self.context = await asyncio.wait_for(
+                    self.browser.new_context(context_config), timeout=25
+                )
+                self.dom_service = DomService(await self.context.get_current_page())
+            except Exception as exc:
+                self._initialization_error = (
+                    f"CloakBrowser initialization failed: {str(exc)}"
+                )
+                if self.browser is not None:
+                    try:
+                        await self.browser.close()
+                    except Exception:
+                        pass
+                self.browser = None
+                self.context = None
+                self.dom_service = None
+                raise RuntimeError(self._initialization_error) from exc
 
         return self.context
 

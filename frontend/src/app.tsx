@@ -1053,7 +1053,7 @@ function App() {
           </DialogContent>
         </Dialog>
 
-        <main className="relative flex-1">
+        <main className="relative min-w-0 flex-1">
           <Routes>
             <Route path="/" element={<HomePage selectedModel={selectedModel} />} />
             <Route

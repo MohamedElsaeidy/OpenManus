@@ -71,6 +71,8 @@ class ToolCallAgent(ReActAgent):
     _current_base64_image: Optional[str] = None
     _last_assistant_content: str = ""
     _consecutive_observe_only_steps: int = 0
+    _used_tools_this_run: bool = False
+    _post_tool_text_misses: int = 0
 
     max_steps: int = config.agent.max_steps
     max_tools_per_step: int = config.agent.max_tools_per_step
@@ -141,6 +143,8 @@ class ToolCallAgent(ReActAgent):
         self.tool_calls = tool_calls = (
             response.tool_calls if response and response.tool_calls else []
         )
+        if tool_calls:
+            self._used_tools_this_run = True
 
         # --- Observe-only step detection ---
         if tool_calls and self._is_observe_only_batch(tool_calls):
@@ -253,6 +257,29 @@ class ToolCallAgent(ReActAgent):
             # other answers that need no external action.
             if self.tool_choices == ToolChoice.AUTO and not self.tool_calls:
                 if content.strip():
+                    if self._used_tools_this_run:
+                        self._post_tool_text_misses += 1
+                        task.emit(
+                            "warning",
+                            {
+                                "message": (
+                                    "Model returned text without a tool call after "
+                                    "tool-backed work; requesting an explicit next action "
+                                    "or termination."
+                                ),
+                                "detail": content.strip(),
+                            },
+                        )
+                        self.memory.add_message(
+                            Message.user_message(
+                                "The task has already used tools and is not structurally "
+                                "complete. If work remains, call the next tool now. If the "
+                                "requested deliverable has been created and verified, call "
+                                "terminate with status, summary, and any limitation. Do not "
+                                "reply with progress narration only."
+                            )
+                        )
+                        return True
                     self.final_response = content.strip()
                     self.final_status = "success"
                     task.emit(
@@ -421,7 +448,7 @@ class ToolCallAgent(ReActAgent):
             if self.tool_choices == ToolChoice.REQUIRED:
                 raise ValueError(TOOL_CALL_REQUIRED)
 
-            return self.messages[-1].content or "No content or commands to execute"
+            return self._last_assistant_content or "No content or commands to execute"
 
         results = []
         index = 0
@@ -846,6 +873,8 @@ class ToolCallAgent(ReActAgent):
 
     async def run(self, task: Task, input: Optional[str] = None) -> str:
         """Run the agent with cleanup when done."""
+        self._used_tools_this_run = False
+        self._post_tool_text_misses = 0
         try:
             return await super().run(task, input)
         finally:

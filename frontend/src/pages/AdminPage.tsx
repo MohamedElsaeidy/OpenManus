@@ -5,31 +5,69 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import {
+  applyCalibrationMode,
   getAdminSettings,
   getCalibrationResult,
   getCalibrationStatus,
   startCalibration,
   updateAdminSettings,
   type AdminSettings,
+  type CalibrationMode,
+  type CalibrationProfile,
   type CalibrationResult,
   type CalibrationStatus,
 } from '@/services/admin';
 import { listModels, queryModels, type ModelOption } from '@/services/models';
 import {
   Activity,
+  BrainCircuit,
   CheckCircle2,
   Cpu,
   Gauge,
   Loader2,
+  MemoryStick,
   RefreshCcw,
   Save,
   ShieldCheck,
   SlidersHorizontal,
+  TriangleAlert,
   Wrench,
   Zap,
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
+
+const formatBytes = (bytes?: number) => {
+  if (!bytes) return 'Unavailable';
+  return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
+};
+
+const calibrationPhaseLabel = (phase: string) => {
+  const labels: Record<string, string> = {
+    detect: 'Reading resources',
+    search_fast: 'Sizing fast mode',
+    benchmark_fast: 'Benchmarking fast mode',
+    search_deep: 'Sizing deep mode',
+    benchmark_deep: 'Benchmarking deep mode',
+    finalize: 'Applying recommendation',
+  };
+  return labels[phase] || 'Initializing';
+};
+
+const residencyLabel = (profile: CalibrationProfile) => {
+  if (profile.residency === 'observed_full_gpu_request') return 'Full GPU request observed';
+  if (profile.residency === 'confirmed_full_gpu_request') return 'Full GPU request confirmed';
+  if (profile.residency === 'full_weight_residency_inferred') return 'GPU weights inferred';
+  return 'LM Studio automatic offload';
+};
+
+const modelQueryStyle = (
+  value?: string,
+): 'lm-studio' | 'ollama' | 'openai' | 'custom' => {
+  if (value === 'lmstudio') return 'lm-studio';
+  if (value === 'lm-studio' || value === 'ollama' || value === 'openai') return value;
+  return 'custom';
+};
 
 export default function AdminPage() {
   const [settings, setSettings] = useState<AdminSettings | null>(null);
@@ -44,6 +82,10 @@ export default function AdminPage() {
   const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
   const [selectedCalModel, setSelectedCalModel] = useState<string>('');
   const [isModelsLoading, setIsModelsLoading] = useState(false);
+  const [gpuTarget, setGpuTarget] = useState('97');
+  const [ramTarget, setRamTarget] = useState('85');
+  const [maxContext, setMaxContext] = useState('');
+  const [applyingMode, setApplyingMode] = useState<CalibrationMode | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const refreshModels = useCallback(async () => {
@@ -54,7 +96,7 @@ export default function AdminPage() {
         items = await queryModels({
           host: settings.llm_connection.base_url,
           api_key: settings.llm_connection.api_key || '',
-          style: (settings.llm_connection.api_type || 'lm-studio') as any,
+          style: modelQueryStyle(settings.llm_connection.api_type || 'lm-studio'),
         });
       }
       if (!items.length) {
@@ -72,7 +114,7 @@ export default function AdminPage() {
       if (!selectedCalModel && unique.length > 0) {
         setSelectedCalModel(settings?.llm_connection.model || unique[0].id);
       }
-    } catch (err) {
+    } catch {
       // ignore silently on background check
     } finally {
       setIsModelsLoading(false);
@@ -209,6 +251,9 @@ export default function AdminPage() {
         model: targetModel,
         base_url: settings.llm_connection.base_url || undefined,
         embedding_model: embeddingModel || undefined,
+        gpu_target_percent: Number(gpuTarget),
+        ram_target_percent: Number(ramTarget),
+        max_context: maxContext ? Number(maxContext) : undefined,
       });
       setCalStatus({ phase: 'init', message: 'Starting...', running: true, progress: 0 });
       startPolling();
@@ -218,11 +263,31 @@ export default function AdminPage() {
     }
   };
 
+  const handleApplyMode = async (mode: CalibrationMode) => {
+    setApplyingMode(mode);
+    try {
+      const { result } = await applyCalibrationMode(mode);
+      setCalResult(result);
+      const refreshed = await getAdminSettings();
+      setSettings(refreshed);
+      localStorage.setItem('openmanus.selectedModel', refreshed.llm_connection.model || '');
+      window.dispatchEvent(new Event('admin-settings-changed'));
+      toast.success(`${mode === 'fast' ? 'Fast' : 'Deep'} mode applied`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : `Could not apply ${mode} mode`);
+    } finally {
+      setApplyingMode(null);
+    }
+  };
+
   const isCalibrating = calStatus?.running === true;
   const calProgress = calStatus?.progress ?? 0;
+  const hasCalibrationProfiles = Boolean(
+    calResult?.profiles?.fast && calResult?.profiles?.deep,
+  );
 
   return (
-    <div className="h-full overflow-y-auto p-6">
+    <div className="h-full min-w-0 overflow-y-auto p-3 sm:p-6">
       <div className="mx-auto max-w-5xl space-y-6">
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card p-4">
           <div>
@@ -235,8 +300,8 @@ export default function AdminPage() {
           </Button>
         </div>
 
-        <Card>
-          <CardHeader className="pb-3">
+        <Card className="min-w-0 overflow-hidden">
+          <CardHeader className="min-w-0 pb-3">
             <CardTitle className="flex items-center gap-2 text-base">
               <ShieldCheck className="size-4" />
               Model Connection
@@ -245,9 +310,9 @@ export default function AdminPage() {
               Overrides here become the active runtime defaults for new agent runs.
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="space-y-1.5">
+          <CardContent className="min-w-0 space-y-4">
+            <div className="grid min-w-0 gap-3 md:grid-cols-2">
+              <div className="min-w-0 space-y-1.5">
                 <div className="flex items-center justify-between">
                   <Label className="text-xs text-muted-foreground">Model</Label>
                   <button
@@ -406,35 +471,29 @@ export default function AdminPage() {
           </CardContent>
         </Card>
 
-        {/* Model Auto-Calibration Card */}
-        <Card className="border-blue-500/30 bg-gradient-to-br from-blue-500/5 via-card to-purple-500/5">
-          <CardHeader className="pb-3">
+        <Card className="min-w-0 overflow-hidden">
+          <CardHeader className="min-w-0 pb-3">
             <CardTitle className="flex items-center gap-2 text-base">
-              <Gauge className="size-4 text-blue-500" />
+              <Gauge className="size-4" />
               Model Auto-Calibration
-              <span className="ml-1 rounded-full bg-blue-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-blue-500">
-                gpu optimizer
-              </span>
             </CardTitle>
             <CardDescription>
-              Automatically finds the maximum context window that fits entirely in GPU VRAM at full speed.
-              Binary-searches across context sizes, benchmarks throughput, and saves optimal settings.
+              Builds a GPU-first fast profile and a RAM-backed deep-context profile within explicit resource limits.
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
-            {/* Model and Embedding model inputs */}
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="space-y-1.5">
+          <CardContent className="min-w-0 space-y-4">
+            <div className="grid min-w-0 gap-3 md:grid-cols-2">
+              <div className="min-w-0 space-y-1.5">
                 <div className="flex items-center justify-between">
                   <Label className="text-xs font-medium text-muted-foreground">
-                    Target LLM Model <span className="text-muted-foreground/60">(queued / loaded)</span>
+                    Target Model
                   </Label>
                   <button
                     type="button"
                     onClick={refreshModels}
                     disabled={isModelsLoading || isCalibrating}
                     title="Refresh queued and loaded models from LM Studio / Base URL"
-                    className="flex items-center gap-1 text-[11px] text-blue-500 hover:text-blue-600 disabled:opacity-50"
+                    className="flex items-center gap-1 text-[11px] text-primary hover:underline disabled:opacity-50"
                   >
                     <RefreshCcw className={`size-3 ${isModelsLoading ? 'animate-spin' : ''}`} />
                     Refresh
@@ -442,13 +501,13 @@ export default function AdminPage() {
                 </div>
                 {availableModels.length > 0 ? (
                   <select
-                    className="h-10 w-full rounded-md border bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="h-10 w-full min-w-0 max-w-full truncate rounded-md border bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                     value={selectedCalModel || settings.llm_connection.model || ''}
                     onChange={e => setSelectedCalModel(e.target.value)}
                     disabled={isCalibrating}
                   >
                     <option value="">
-                      {settings.llm_connection.model ? `Default (${settings.llm_connection.model})` : '-- Select model to calibrate --'}
+                      {settings.llm_connection.model ? `Default (${settings.llm_connection.model})` : 'Select model'}
                     </option>
                     {availableModels.map(item => (
                       <option key={item.id} value={item.id}>
@@ -459,7 +518,7 @@ export default function AdminPage() {
                   </select>
                 ) : (
                   <Input
-                    placeholder="e.g. qwen3.5-coder (click Refresh to detect queued models)"
+                    placeholder="qwen3.5-coder"
                     value={selectedCalModel || settings.llm_connection.model || ''}
                     onChange={e => setSelectedCalModel(e.target.value)}
                     disabled={isCalibrating}
@@ -467,12 +526,10 @@ export default function AdminPage() {
                 )}
               </div>
 
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">
-                  Embedding Model <span className="text-muted-foreground/60">(optional co-resident check)</span>
-                </Label>
+              <div className="min-w-0 space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Co-resident Embedding Model</Label>
                 <Input
-                  placeholder="e.g. text-embedding-nomic-embed-text-v1.5"
+                  placeholder="Optional"
                   value={embeddingModel}
                   onChange={event => setEmbeddingModel(event.target.value)}
                   disabled={isCalibrating}
@@ -480,11 +537,55 @@ export default function AdminPage() {
               </div>
             </div>
 
-            <div className="flex justify-end pt-1">
+            <div className="grid min-w-0 gap-3 border-t pt-4 sm:grid-cols-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">GPU Limit (%)</Label>
+                <Input
+                  type="number"
+                  min="50"
+                  max="99.5"
+                  step="0.5"
+                  value={gpuTarget}
+                  onChange={event => setGpuTarget(event.target.value)}
+                  disabled={isCalibrating}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">RAM Limit (%)</Label>
+                <Input
+                  type="number"
+                  min="50"
+                  max="95"
+                  step="1"
+                  value={ramTarget}
+                  onChange={event => setRamTarget(event.target.value)}
+                  disabled={isCalibrating}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Context Search Cap</Label>
+                <Input
+                  type="number"
+                  min="8192"
+                  step="1024"
+                  placeholder="Model maximum"
+                  value={maxContext}
+                  onChange={event => setMaxContext(event.target.value)}
+                  disabled={isCalibrating}
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end">
               <Button
                 onClick={handleStartCalibration}
-                disabled={isCalibrating || !settings.llm_connection.base_url}
-                className="w-full md:w-auto px-6 gap-2 bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+                disabled={
+                  isCalibrating ||
+                  !settings.llm_connection.base_url ||
+                  !gpuTarget ||
+                  !ramTarget
+                }
+                className="w-full gap-2 md:w-auto"
               >
                 {isCalibrating ? (
                   <>
@@ -494,43 +595,39 @@ export default function AdminPage() {
                 ) : (
                   <>
                     <Zap className="size-4" />
-                    Start GPU Calibration
+                    Calibrate Profiles
                   </>
                 )}
               </Button>
             </div>
 
-            {/* Progress bar */}
             {calStatus && (calStatus.running || calStatus.phase === 'done' || calStatus.phase === 'error') && (
-              <div className="space-y-2">
+              <div className="space-y-2 border-t pt-4">
                 <div className="flex items-center justify-between text-xs">
                   <span className="flex items-center gap-1.5 font-medium">
                     {calStatus.phase === 'error' ? (
-                      <span className="text-red-500">✗ Error</span>
+                      <span className="text-destructive">Calibration failed</span>
                     ) : calStatus.phase === 'done' ? (
-                      <span className="flex items-center gap-1 text-green-500">
+                      <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
                         <CheckCircle2 className="size-3.5" /> Complete
                       </span>
                     ) : (
-                      <span className="flex items-center gap-1 text-blue-500">
+                      <span className="flex items-center gap-1 text-primary">
                         <Activity className="size-3.5 animate-pulse" />
-                        {calStatus.phase === 'search' ? 'Binary Search' :
-                         calStatus.phase === 'benchmark' ? 'Benchmarking' :
-                         calStatus.phase === 'detect' ? 'Detecting' : 'Initializing'}
+                        {calibrationPhaseLabel(calStatus.phase)}
                       </span>
                     )}
                   </span>
                   <span className="tabular-nums text-muted-foreground">{calProgress}%</span>
                 </div>
-                {/* Progress track */}
                 <div className="relative h-2 w-full overflow-hidden rounded-full bg-muted">
                   <div
                     className={`absolute left-0 top-0 h-full rounded-full transition-all duration-500 ease-out ${
                       calStatus.phase === 'error'
-                        ? 'bg-red-500'
+                        ? 'bg-destructive'
                         : calStatus.phase === 'done'
-                          ? 'bg-green-500'
-                          : 'bg-blue-500'
+                          ? 'bg-emerald-500'
+                          : 'bg-primary'
                     }`}
                     style={{ width: `${calProgress}%` }}
                   />
@@ -539,50 +636,100 @@ export default function AdminPage() {
               </div>
             )}
 
-            {/* Results card */}
-            {calResult && (
-              <div className="rounded-lg border border-green-500/20 bg-green-500/5 p-4">
-                <div className="mb-3 flex items-center gap-2 text-sm font-medium text-green-600 dark:text-green-400">
-                  <CheckCircle2 className="size-4" />
-                  Calibration Results
-                </div>
-                <div className="grid gap-3 md:grid-cols-3">
-                  <div className="rounded-md border bg-card p-3 text-center">
-                    <div className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
-                      <Cpu className="size-3" /> Optimal Context
+            {calResult && !hasCalibrationProfiles && (
+              <div className="flex items-start gap-2 border-t pt-4 text-sm text-amber-700 dark:text-amber-300">
+                <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+                The saved result uses the retired context-only calibration. Run calibration to create resource-aware profiles.
+              </div>
+            )}
+
+            {calResult && hasCalibrationProfiles && (
+              <div className="space-y-4 border-t pt-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="break-words text-sm font-medium">{calResult.model_id}</div>
+                    <div className="text-xs text-muted-foreground">
+                      Tested to {calResult.tested_max_context.toLocaleString()} of {calResult.declared_max_context.toLocaleString()} tokens
                     </div>
-                    <div className="mt-1 text-lg font-bold tabular-nums">
-                      {calResult.optimal_context.toLocaleString()}
-                    </div>
-                    <div className="text-[10px] text-muted-foreground">tokens</div>
                   </div>
-                  <div className="rounded-md border bg-card p-3 text-center">
-                    <div className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
-                      <Zap className="size-3" /> Generation Speed
-                    </div>
-                    <div className="mt-1 text-lg font-bold tabular-nums">
-                      {calResult.generation_speed}
-                    </div>
-                    <div className="text-[10px] text-muted-foreground">tokens/sec</div>
-                  </div>
-                  <div className="rounded-md border bg-card p-3 text-center">
-                    <div className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
-                      <Activity className="size-3" /> Evaluation Speed
-                    </div>
-                    <div className="mt-1 text-lg font-bold tabular-nums">
-                      {calResult.evaluation_speed}
-                    </div>
-                    <div className="text-[10px] text-muted-foreground">tokens/sec</div>
+                  <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                    <span className="flex items-center gap-1">
+                      <Cpu className="size-3.5" />
+                      GPU {formatBytes(calResult.resource_snapshot.gpu.total_bytes)}
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <MemoryStick className="size-3.5" />
+                      RAM {formatBytes(calResult.resource_snapshot.ram.total_bytes)}
+                    </span>
                   </div>
                 </div>
-                <div className="mt-3 grid gap-1.5 text-xs text-muted-foreground md:grid-cols-2">
-                  <div>Model: <span className="font-medium text-foreground">{calResult.model_id}</span></div>
-                  <div>GPU Offload: <span className="font-medium text-foreground">{calResult.gpu_offload}</span></div>
-                  {calResult.embedding_model && (
-                    <div>Embedding: <span className="font-medium text-foreground">{calResult.embedding_model}</span></div>
-                  )}
-                  <div>Max Found: <span className="font-medium text-foreground">{calResult.max_context_found.toLocaleString()} tokens</span></div>
+
+                <div className="divide-y rounded-md border">
+                  {(['fast', 'deep'] as CalibrationMode[]).map(mode => {
+                    const profile = calResult.profiles[mode];
+                    const isActive = calResult.active_mode === mode;
+                    const isRecommended = calResult.recommended_mode === mode;
+                    return (
+                      <div key={mode} className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,2fr)_auto] lg:items-center">
+                        <div className="flex items-start gap-3">
+                          <div className="flex size-9 shrink-0 items-center justify-center rounded-md border bg-muted/40">
+                            {mode === 'fast' ? <Zap className="size-4" /> : <BrainCircuit className="size-4" />}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-sm font-semibold capitalize">{mode}</span>
+                              {isActive && <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400">Active</span>}
+                              {isRecommended && <span className="text-xs text-muted-foreground">Recommended</span>}
+                            </div>
+                            <div className="mt-0.5 text-xs text-muted-foreground">
+                              {profile.context_length.toLocaleString()} tokens, KV cache on {profile.kv_cache.toUpperCase()}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-x-5 gap-y-2 text-xs sm:grid-cols-4">
+                          <div>
+                            <div className="text-muted-foreground">Generation</div>
+                            <div className="mt-0.5 font-medium tabular-nums">{profile.generation_speed || 'N/A'} tok/s</div>
+                          </div>
+                          <div>
+                            <div className="text-muted-foreground">Prompt eval</div>
+                            <div className="mt-0.5 font-medium tabular-nums">{profile.evaluation_speed || 'N/A'} tok/s</div>
+                          </div>
+                          <div>
+                            <div className="text-muted-foreground">GPU / RAM</div>
+                            <div className="mt-0.5 font-medium tabular-nums">
+                              {profile.gpu_used_percent ?? 'N/A'}% / {profile.ram_used_percent ?? 'N/A'}%
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-muted-foreground">Residency</div>
+                            <div className="mt-0.5 font-medium" title={profile.residency}>
+                              {residencyLabel(profile)} ({profile.residency_confidence})
+                            </div>
+                          </div>
+                        </div>
+
+                        <Button
+                          variant={isActive ? 'outline' : 'default'}
+                          size="sm"
+                          disabled={isActive || applyingMode !== null || isCalibrating}
+                          onClick={() => handleApplyMode(mode)}
+                        >
+                          {applyingMode === mode && <Loader2 className="size-3.5 animate-spin" />}
+                          {isActive ? 'Applied' : `Apply ${mode}`}
+                        </Button>
+                      </div>
+                    );
+                  })}
                 </div>
+
+                {calResult.telemetry.gpu_usage_source !== 'nvidia-smi' && (
+                  <div className="flex items-start gap-2 text-xs text-amber-700 dark:text-amber-300">
+                    <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+                    Exact GPU utilization is unavailable to this server. LM Studio confirms context and KV placement, but does not expose actual model-weight residency; profile confidence is reduced.
+                  </div>
+                )}
               </div>
             )}
           </CardContent>

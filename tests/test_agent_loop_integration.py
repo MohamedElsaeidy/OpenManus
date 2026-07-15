@@ -81,6 +81,34 @@ class TestAgentLoopIntegration:
             assert agent.phase == AgentPhase.DONE
 
     @pytest.mark.asyncio
+    async def test_text_only_progress_after_tools_does_not_finish(self, agent, task):
+        """Progress narration after a tool call must not become the final answer."""
+        tc = ToolCall(
+            id="call_1",
+            function=Function(name="bash", arguments='{"command": "echo research"}'),
+        )
+        mock_ask = AsyncMock(
+            side_effect=[
+                MockLLMResponse(content="Researching...", tool_calls=[tc]),
+                MockLLMResponse(content="Good progress. Let me fetch more sources."),
+            ]
+        )
+
+        with patch.object(agent.llm, "ask_tool", mock_ask), patch.object(
+            agent.llm, "format_messages", return_value=[]
+        ), patch.object(agent.llm, "count_message_tokens", return_value=100):
+            await agent.step(task)
+            result = await agent.step(task)
+
+        assert agent.state != AgentState.FINISHED
+        assert agent.final_response is None
+        assert result == "Good progress. Let me fetch more sources."
+        assert any(
+            "call the next tool now" in (message.content or "")
+            for message in agent.messages
+        )
+
+    @pytest.mark.asyncio
     async def test_tool_retry_on_error(self, agent, task):
         """Test that execute_tool retries when a tool returns ToolResult.is_error."""
         from app.tool.base import ToolResult

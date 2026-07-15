@@ -1093,6 +1093,15 @@ def _task_input(
     identity_notes: Optional[str] = None,
 ) -> dict:
     data = {"conversation_id": conversation_id}
+    if not requested_context_window:
+        try:
+            with registry.SessionLocal() as session:
+                connection = _effective_llm_connection(session)
+            calibrated_context = int(connection.get("context_window") or 0)
+            if calibrated_context > 0:
+                requested_context_window = calibrated_context
+        except (TypeError, ValueError):
+            requested_context_window = None
     if prompt:
         data["prompt"] = prompt
     if parent_task_id:
@@ -1952,7 +1961,7 @@ async def update_admin_settings(request: Request):
 _calibration_status: dict = {}
 
 
-def _calibrate_model_sync(
+def _calibrate_model_sync_legacy(
     base_url: str,
     model_id: str,
     api_key: str | None,
@@ -2280,6 +2289,54 @@ def _try_load_via_api(
         return False
 
 
+def _calibrate_model_sync(
+    base_url: str,
+    model_id: str,
+    api_key: str | None,
+    embedding_model: str | None,
+    gpu_target_percent: float = 97.0,
+    ram_target_percent: float = 85.0,
+    max_context: int | None = None,
+) -> dict:
+    from server.model_calibration import LMStudioCalibrationRunner
+
+    global _calibration_status
+
+    def status(phase: str, message: str, progress: int = -1, **extra) -> None:
+        _calibration_status.update(
+            phase=phase,
+            message=message,
+            progress=progress,
+            running=True,
+            **extra,
+        )
+
+    status("init", "Starting resource-aware calibration", 0)
+    runner = LMStudioCalibrationRunner(
+        base_url=base_url,
+        model_id=model_id,
+        api_key=api_key,
+        embedding_model=embedding_model,
+        gpu_target_percent=gpu_target_percent,
+        ram_target_percent=ram_target_percent,
+        max_context=max_context,
+        status_callback=status,
+    )
+    result = runner.run()
+    active = result["profiles"][result["active_mode"]]
+    _calibration_status.update(
+        phase="done",
+        running=False,
+        progress=100,
+        result=result,
+        message=(
+            f"Calibration complete. {result['active_mode'].title()} mode is active at "
+            f"{active['context_length']:,} tokens."
+        ),
+    )
+    return result
+
+
 @app.post("/api/admin/calibrate")
 async def start_calibration(request: Request):
     """Launch model auto-calibration in a background thread."""
@@ -2302,6 +2359,31 @@ async def start_calibration(request: Request):
     model_id = body.get("model") or connection.get("model", "")
     api_key = body.get("api_key") or connection.get("api_key") or ""
     embedding_model = body.get("embedding_model") or ""
+    try:
+        gpu_target_percent = float(body.get("gpu_target_percent", 97))
+        ram_target_percent = float(body.get("ram_target_percent", 85))
+        max_context_raw = body.get("max_context")
+        max_context = (
+            int(max_context_raw) if max_context_raw not in (None, "") else None
+        )
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=400, detail="Calibration limits must be numeric"
+        )
+
+    if not 50 <= gpu_target_percent <= 99.5:
+        raise HTTPException(
+            status_code=400,
+            detail="GPU target must be between 50 and 99.5 percent",
+        )
+    if not 50 <= ram_target_percent <= 95:
+        raise HTTPException(
+            status_code=400, detail="RAM target must be between 50 and 95 percent"
+        )
+    if max_context is not None and max_context < 8192:
+        raise HTTPException(
+            status_code=400, detail="Maximum context must be at least 8192"
+        )
 
     if not base_url:
         raise HTTPException(status_code=400, detail="No base_url configured")
@@ -2318,23 +2400,32 @@ async def start_calibration(request: Request):
     def _run():
         try:
             result = _calibrate_model_sync(
-                base_url, model_id, api_key or None, embedding_model or None
+                base_url,
+                model_id,
+                api_key or None,
+                embedding_model or None,
+                gpu_target_percent,
+                ram_target_percent,
+                max_context,
             )
-            # Auto-save the optimal settings if calibration succeeded
             if "error" not in result:
                 with registry.SessionLocal() as session:
                     existing = _get_app_setting(session, "llm_connection", {})
                     if isinstance(existing, dict):
                         existing["model"] = result["model_id"]
-                        existing["max_tokens"] = min(
-                            result["optimal_context"] // 4, 32768
-                        )
+                        existing["calibration_mode"] = result["active_mode"]
+                        existing["context_window"] = result["profiles"][
+                            result["active_mode"]
+                        ]["context_length"]
                     else:
                         existing = {
                             "model": result["model_id"],
                             "base_url": base_url,
                             "api_type": "lmstudio",
-                            "max_tokens": min(result["optimal_context"] // 4, 32768),
+                            "calibration_mode": result["active_mode"],
+                            "context_window": result["profiles"][result["active_mode"]][
+                                "context_length"
+                            ],
                         }
                     _set_app_setting(session, "llm_connection", existing)
 
@@ -2374,6 +2465,67 @@ async def get_calibration_result(request: Request):
     with registry.SessionLocal() as session:
         result = _get_app_setting(session, "calibration_result", None)
     return {"result": result}
+
+
+@app.post("/api/admin/calibration/apply")
+async def apply_calibration_mode(request: Request):
+    _require_admin(request)
+    body = await request.json()
+    mode = str(body.get("mode") or "").strip().lower()
+    if mode not in {"fast", "deep"}:
+        raise HTTPException(status_code=400, detail="Mode must be 'fast' or 'deep'")
+
+    with registry.SessionLocal() as session:
+        result = _get_app_setting(session, "calibration_result", None)
+        connection = _effective_llm_connection(session)
+    if not isinstance(result, dict) or not isinstance(result.get("profiles"), dict):
+        raise HTTPException(
+            status_code=404, detail="No resource-aware calibration result found"
+        )
+    profile = result["profiles"].get(mode)
+    if not isinstance(profile, dict):
+        raise HTTPException(
+            status_code=404, detail=f"Calibration mode '{mode}' is unavailable"
+        )
+
+    from server.model_calibration import apply_profile
+
+    try:
+        applied = await asyncio.to_thread(
+            apply_profile,
+            base_url=str(connection.get("base_url") or ""),
+            model_id=str(result.get("model_id") or connection.get("model") or ""),
+            api_key=str(connection.get("api_key") or "") or None,
+            embedding_model=str(result.get("embedding_model") or "") or None,
+            profile=profile,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Could not apply {mode} mode: {exc}"
+        )
+
+    result["active_mode"] = mode
+    with registry.SessionLocal() as session:
+        connection = _get_app_setting(session, "llm_connection", {})
+        if not isinstance(connection, dict):
+            connection = {}
+        connection.update(
+            {
+                "model": result["model_id"],
+                "calibration_mode": mode,
+                "context_window": int(profile["context_length"]),
+            }
+        )
+        _set_app_setting(session, "llm_connection", connection)
+        _set_app_setting(session, "calibration_result", result)
+        session.commit()
+    return {
+        "ok": True,
+        "mode": mode,
+        "profile": profile,
+        "applied": applied,
+        "result": result,
+    }
 
 
 @app.get("/api/conversations")
