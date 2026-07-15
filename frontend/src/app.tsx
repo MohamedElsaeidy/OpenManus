@@ -290,22 +290,48 @@ function App() {
   useEffect(() => {
     if (!user) return;
     refreshConversations();
-    fetchModelsForProfile(activeProfile).then(items => {
-      setModels(items);
-      const initial = selectedModel || activeProfile.defaultModel;
-      if (initial && items.some(model => model.id === initial)) {
-        setSelectedModel(initial);
-        localStorage.setItem(STORAGE.selectedModel, initial);
-        syncActiveProfileToBackend(activeProfile, initial);
-      } else if (items[0]?.id) {
-        setSelectedModel(items[0].id);
-        localStorage.setItem(STORAGE.selectedModel, items[0].id);
-        syncActiveProfileToBackend(activeProfile, items[0].id);
-      } else {
-        syncActiveProfileToBackend(activeProfile, selectedModel || activeProfile.defaultModel);
+    getAdminSettings()
+      .then(adminSettings => {
+        const backendModel = adminSettings?.llm_connection?.model;
+        fetchModelsForProfile(activeProfile).then(items => {
+          setModels(items);
+          const initial = backendModel || selectedModel || activeProfile.defaultModel;
+          if (initial && items.some(model => model.id === initial)) {
+            setSelectedModel(initial);
+            localStorage.setItem(STORAGE.selectedModel, initial);
+          } else if (items[0]?.id) {
+            setSelectedModel(items[0].id);
+            localStorage.setItem(STORAGE.selectedModel, items[0].id);
+          } else if (initial) {
+            setSelectedModel(initial);
+            localStorage.setItem(STORAGE.selectedModel, initial);
+          }
+        });
+      })
+      .catch(() => {
+        fetchModelsForProfile(activeProfile).then(items => setModels(items));
+      });
+  }, [user, refreshConversations, activeProfile]);
+
+  useEffect(() => {
+    const handleSettingsSync = async () => {
+      try {
+        const adminSettings = await getAdminSettings().catch(() => null);
+        if (adminSettings?.llm_connection?.model) {
+          setSelectedModel(adminSettings.llm_connection.model);
+          localStorage.setItem(STORAGE.selectedModel, adminSettings.llm_connection.model);
+        }
+      } catch {
+        /* ignore */
       }
-    });
-  }, [user, refreshConversations, activeProfile, activeProfile.defaultModel, selectedModel]);
+    };
+    window.addEventListener('admin-settings-changed', handleSettingsSync);
+    window.addEventListener('focus', handleSettingsSync);
+    return () => {
+      window.removeEventListener('admin-settings-changed', handleSettingsSync);
+      window.removeEventListener('focus', handleSettingsSync);
+    };
+  }, []);
 
   useEffect(() => {
     setConnectionHostDraft(activeProfile.host || styleDefaultHost(activeProfile.style));

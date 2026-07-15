@@ -14,12 +14,14 @@ import {
   type CalibrationResult,
   type CalibrationStatus,
 } from '@/services/admin';
+import { listModels, queryModels, type ModelOption } from '@/services/models';
 import {
   Activity,
   CheckCircle2,
   Cpu,
   Gauge,
   Loader2,
+  RefreshCcw,
   Save,
   ShieldCheck,
   SlidersHorizontal,
@@ -39,7 +41,49 @@ export default function AdminPage() {
   const [calStatus, setCalStatus] = useState<CalibrationStatus | null>(null);
   const [calResult, setCalResult] = useState<CalibrationResult | null>(null);
   const [embeddingModel, setEmbeddingModel] = useState('');
+  const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
+  const [selectedCalModel, setSelectedCalModel] = useState<string>('');
+  const [isModelsLoading, setIsModelsLoading] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const refreshModels = useCallback(async () => {
+    setIsModelsLoading(true);
+    try {
+      let items: ModelOption[] = [];
+      if (settings?.llm_connection.base_url) {
+        items = await queryModels({
+          host: settings.llm_connection.base_url,
+          api_key: settings.llm_connection.api_key || '',
+          style: (settings.llm_connection.api_type || 'lm-studio') as any,
+        });
+      }
+      if (!items.length) {
+        items = await listModels();
+      }
+      const seen = new Set<string>();
+      const unique: ModelOption[] = [];
+      for (const m of items) {
+        if (!seen.has(m.id)) {
+          seen.add(m.id);
+          unique.push(m);
+        }
+      }
+      setAvailableModels(unique);
+      if (!selectedCalModel && unique.length > 0) {
+        setSelectedCalModel(settings?.llm_connection.model || unique[0].id);
+      }
+    } catch (err) {
+      // ignore silently on background check
+    } finally {
+      setIsModelsLoading(false);
+    }
+  }, [settings?.llm_connection.base_url, settings?.llm_connection.api_key, settings?.llm_connection.api_type, settings?.llm_connection.model, selectedCalModel]);
+
+  useEffect(() => {
+    if (settings?.llm_connection.base_url) {
+      refreshModels();
+    }
+  }, [settings?.llm_connection.base_url, refreshModels]);
 
   useEffect(() => {
     getAdminSettings()
@@ -49,6 +93,10 @@ export default function AdminPage() {
         setFallbackChainText(
           JSON.stringify(data.llm_connection?.fallback_chain || [], null, 2),
         );
+        if (data.llm_connection?.model) {
+          setSelectedCalModel(data.llm_connection.model);
+          localStorage.setItem('openmanus.selectedModel', data.llm_connection.model);
+        }
       })
       .catch(error => toast.error(error.message));
 
@@ -95,6 +143,11 @@ export default function AdminPage() {
             setFallbackChainText(
               JSON.stringify(refreshed.llm_connection?.fallback_chain || [], null, 2),
             );
+            if (refreshed.llm_connection?.model) {
+              setSelectedCalModel(refreshed.llm_connection.model);
+              localStorage.setItem('openmanus.selectedModel', refreshed.llm_connection.model);
+              window.dispatchEvent(new Event('admin-settings-changed'));
+            }
           } catch { /* ignore */ }
         }
       } catch {
@@ -136,6 +189,11 @@ export default function AdminPage() {
       setFallbackChainText(
         JSON.stringify(saved.llm_connection?.fallback_chain || [], null, 2),
       );
+      if (saved.llm_connection?.model) {
+        setSelectedCalModel(saved.llm_connection.model);
+        localStorage.setItem('openmanus.selectedModel', saved.llm_connection.model);
+        window.dispatchEvent(new Event('admin-settings-changed'));
+      }
       toast.success('Admin settings saved');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not save settings');
@@ -146,14 +204,15 @@ export default function AdminPage() {
 
   const handleStartCalibration = async () => {
     try {
+      const targetModel = selectedCalModel || settings.llm_connection.model || undefined;
       await startCalibration({
-        model: settings.llm_connection.model || undefined,
+        model: targetModel,
         base_url: settings.llm_connection.base_url || undefined,
         embedding_model: embeddingModel || undefined,
       });
       setCalStatus({ phase: 'init', message: 'Starting...', running: true, progress: 0 });
       startPolling();
-      toast.success('Calibration started');
+      toast.success(`Calibration started for ${targetModel || 'default model'}`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not start calibration');
     }
@@ -189,14 +248,48 @@ export default function AdminPage() {
           <CardContent className="space-y-4">
             <div className="grid gap-3 md:grid-cols-2">
               <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Model</Label>
-                <Input
-                  placeholder="qwen3.5-coder"
-                  value={settings.llm_connection.model || ''}
-                  onChange={event =>
-                    setSettings({ ...settings, llm_connection: { ...settings.llm_connection, model: event.target.value } })
-                  }
-                />
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs text-muted-foreground">Model</Label>
+                  <button
+                    type="button"
+                    onClick={refreshModels}
+                    disabled={isModelsLoading}
+                    className="flex items-center gap-1 text-[11px] text-blue-500 hover:underline disabled:opacity-50"
+                  >
+                    <RefreshCcw className={`size-3 ${isModelsLoading ? 'animate-spin' : ''}`} />
+                    Refresh list
+                  </button>
+                </div>
+                <div className="flex gap-2">
+                  <Input
+                    placeholder="qwen3.5-coder"
+                    value={settings.llm_connection.model || ''}
+                    onChange={event => {
+                      setSettings({ ...settings, llm_connection: { ...settings.llm_connection, model: event.target.value } });
+                      setSelectedCalModel(event.target.value);
+                    }}
+                    className="flex-1"
+                  />
+                  {availableModels.length > 0 && (
+                    <select
+                      className="h-10 w-44 rounded-md border bg-background px-2 text-xs text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary truncate"
+                      value=""
+                      onChange={event => {
+                        if (event.target.value) {
+                          setSettings({ ...settings, llm_connection: { ...settings.llm_connection, model: event.target.value } });
+                          setSelectedCalModel(event.target.value);
+                        }
+                      }}
+                    >
+                      <option value="">Select queued...</option>
+                      {availableModels.map(item => (
+                        <option key={item.id} value={item.id}>
+                          {item.name && item.name !== item.id ? `${item.name} (${item.id})` : item.id} {item.state ? `(${item.state})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">API Type</Label>
@@ -329,38 +422,82 @@ export default function AdminPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            {/* Embedding model input */}
+            {/* Model and Embedding model inputs */}
             <div className="grid gap-3 md:grid-cols-2">
               <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-medium text-muted-foreground">
+                    Target LLM Model <span className="text-muted-foreground/60">(queued / loaded)</span>
+                  </Label>
+                  <button
+                    type="button"
+                    onClick={refreshModels}
+                    disabled={isModelsLoading || isCalibrating}
+                    title="Refresh queued and loaded models from LM Studio / Base URL"
+                    className="flex items-center gap-1 text-[11px] text-blue-500 hover:text-blue-600 disabled:opacity-50"
+                  >
+                    <RefreshCcw className={`size-3 ${isModelsLoading ? 'animate-spin' : ''}`} />
+                    Refresh
+                  </button>
+                </div>
+                {availableModels.length > 0 ? (
+                  <select
+                    className="h-10 w-full rounded-md border bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={selectedCalModel || settings.llm_connection.model || ''}
+                    onChange={e => setSelectedCalModel(e.target.value)}
+                    disabled={isCalibrating}
+                  >
+                    <option value="">
+                      {settings.llm_connection.model ? `Default (${settings.llm_connection.model})` : '-- Select model to calibrate --'}
+                    </option>
+                    {availableModels.map(item => (
+                      <option key={item.id} value={item.id}>
+                        {item.name && item.name !== item.id ? `${item.name} (${item.id})` : item.id}
+                        {item.state ? ` [${item.state}]` : ''}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <Input
+                    placeholder="e.g. qwen3.5-coder (click Refresh to detect queued models)"
+                    value={selectedCalModel || settings.llm_connection.model || ''}
+                    onChange={e => setSelectedCalModel(e.target.value)}
+                    disabled={isCalibrating}
+                  />
+                )}
+              </div>
+
+              <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">
-                  Embedding Model <span className="text-muted-foreground/60">(optional)</span>
+                  Embedding Model <span className="text-muted-foreground/60">(optional co-resident check)</span>
                 </Label>
                 <Input
-                  placeholder="text-embedding-nomic-embed-text-v1.5"
+                  placeholder="e.g. text-embedding-nomic-embed-text-v1.5"
                   value={embeddingModel}
                   onChange={event => setEmbeddingModel(event.target.value)}
                   disabled={isCalibrating}
                 />
               </div>
-              <div className="flex items-end">
-                <Button
-                  onClick={handleStartCalibration}
-                  disabled={isCalibrating || !settings.llm_connection.base_url}
-                  className="w-full gap-2 bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
-                >
-                  {isCalibrating ? (
-                    <>
-                      <Loader2 className="size-4 animate-spin" />
-                      Calibrating...
-                    </>
-                  ) : (
-                    <>
-                      <Zap className="size-4" />
-                      Start Calibration
-                    </>
-                  )}
-                </Button>
-              </div>
+            </div>
+
+            <div className="flex justify-end pt-1">
+              <Button
+                onClick={handleStartCalibration}
+                disabled={isCalibrating || !settings.llm_connection.base_url}
+                className="w-full md:w-auto px-6 gap-2 bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                {isCalibrating ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin" />
+                    Calibrating {selectedCalModel || settings.llm_connection.model || 'model'}...
+                  </>
+                ) : (
+                  <>
+                    <Zap className="size-4" />
+                    Start GPU Calibration
+                  </>
+                )}
+              </Button>
             </div>
 
             {/* Progress bar */}

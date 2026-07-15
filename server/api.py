@@ -1219,7 +1219,7 @@ async def list_models(request: Request):
             listing = _lmstudio_api_request(
                 "GET", base_url, "/models", token=api_key or None, timeout=8
             )
-            lm_models = listing.get("data") if isinstance(listing, dict) else []
+            lm_models = _extract_model_rows(listing)
             if isinstance(lm_models, list):
                 for item in lm_models:
                     if not isinstance(item, dict):
@@ -1276,7 +1276,7 @@ async def query_models(request: Request):
     models: list[dict] = []
     url = ""
     try:
-        if style == "lm-studio":
+        if style in {"lm-studio", "lmstudio"} or "1234" in host or "lmstudio" in host.lower():
             data = _lmstudio_api_request(
                 "GET", host, "/models", token=api_key, timeout=8
             )
