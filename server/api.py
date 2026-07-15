@@ -1931,8 +1931,8 @@ def _calibrate_model_sync(
     SSE stream can push live status updates to the UI.
     """
     import time
-    import urllib.request
     import urllib.error
+    import urllib.request
 
     global _calibration_status
 
@@ -1960,8 +1960,11 @@ def _calibrate_model_sync(
 
     def status(phase: str, message: str, progress: int = -1, **extra):
         _calibration_status.update(
-            phase=phase, message=message, progress=progress,
-            running=True, **extra,
+            phase=phase,
+            message=message,
+            progress=progress,
+            running=True,
+            **extra,
         )
 
     def try_load_config(context_len: int) -> bool:
@@ -1972,7 +1975,9 @@ def _calibrate_model_sync(
         lms = os.path.expanduser("~/.lmstudio/bin/lms")
         if not os.path.isfile(lms):
             # Fall back to API-only check if lms CLI is not available
-            return _try_load_via_api(root, model_id, context_len, embedding_model, api_key)
+            return _try_load_via_api(
+                root, model_id, context_len, embedding_model, api_key
+            )
 
         # Unload all
         subprocess.run([lms, "unload", "--all"], capture_output=True, timeout=30)
@@ -1981,7 +1986,9 @@ def _calibrate_model_sync(
         # Load main model with full GPU offload
         result = subprocess.run(
             [lms, "load", model_id, "--gpu", "max", "-c", str(context_len), "-y"],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
         if result.returncode != 0:
             return False
@@ -1991,7 +1998,9 @@ def _calibrate_model_sync(
             time.sleep(1)
             result = subprocess.run(
                 [lms, "load", embedding_model, "-y"],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True,
+                text=True,
+                timeout=30,
             )
             if result.returncode != 0:
                 # Embedding failed – this context size is too large
@@ -2006,12 +2015,20 @@ def _calibrate_model_sync(
         # Pass 1: generation speed
         try:
             t0 = time.time()
-            resp = _post_json(completions_url, {
-                "model": model_id,
-                "messages": [{"role": "user", "content": "Write a short creative story about a cat in exactly two paragraphs."}],
-                "temperature": 0.0,
-                "max_tokens": 150,
-            })
+            resp = _post_json(
+                completions_url,
+                {
+                    "model": model_id,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Write a short creative story about a cat in exactly two paragraphs.",
+                        }
+                    ],
+                    "temperature": 0.0,
+                    "max_tokens": 150,
+                },
+            )
             duration = time.time() - t0
             usage = resp.get("usage", {})
             gen_tokens = usage.get("completion_tokens", 0)
@@ -2022,15 +2039,20 @@ def _calibrate_model_sync(
 
         # Pass 2: prompt evaluation speed
         try:
-            filler = "The Model Context Protocol is an open standard for AI communication. "
+            filler = (
+                "The Model Context Protocol is an open standard for AI communication. "
+            )
             large_prompt = (filler * 300) + "\nSummarize the above in three words."
             t0 = time.time()
-            resp = _post_json(completions_url, {
-                "model": model_id,
-                "messages": [{"role": "user", "content": large_prompt}],
-                "temperature": 0.0,
-                "max_tokens": 5,
-            })
+            resp = _post_json(
+                completions_url,
+                {
+                    "model": model_id,
+                    "messages": [{"role": "user", "content": large_prompt}],
+                    "temperature": 0.0,
+                    "max_tokens": 5,
+                },
+            )
             duration2 = time.time() - t0
             usage2 = resp.get("usage", {})
             prompt_tokens = usage2.get("prompt_tokens", 0)
@@ -2058,8 +2080,16 @@ def _calibrate_model_sync(
     try:
         models_resp = _get_json(f"{root}/v1/models", timeout=8)
         loaded_models = models_resp.get("data", [])
-        llm_models = [m for m in loaded_models if isinstance(m, dict) and m.get("type") != "embeddings"]
-        embed_models = [m for m in loaded_models if isinstance(m, dict) and m.get("type") == "embeddings"]
+        llm_models = [
+            m
+            for m in loaded_models
+            if isinstance(m, dict) and m.get("type") != "embeddings"
+        ]
+        embed_models = [
+            m
+            for m in loaded_models
+            if isinstance(m, dict) and m.get("type") == "embeddings"
+        ]
 
         if not model_id and llm_models:
             model_id_detected = llm_models[0].get("id", "")
@@ -2076,8 +2106,10 @@ def _calibrate_model_sync(
 
     if not model_id_detected:
         _calibration_status.update(
-            phase="error", message="No model specified or detected. Load a model in LM Studio first.",
-            running=False, progress=100,
+            phase="error",
+            message="No model specified or detected. Load a model in LM Studio first.",
+            running=False,
+            progress=100,
         )
         return {"error": "No model detected"}
 
@@ -2085,13 +2117,18 @@ def _calibrate_model_sync(
     model_id = model_id_detected
     embedding_model = embedding_model_detected
 
-    status("detect", f"Calibrating model: {model_id}", 10,
-           model_id=model_id, embedding_model=embedding_model or "none")
+    status(
+        "detect",
+        f"Calibrating model: {model_id}",
+        10,
+        model_id=model_id,
+        embedding_model=embedding_model or "none",
+    )
 
     # Step 2: Binary search for max context window
     # Start with known bounds
-    lo = 8000       # minimum useful context
-    hi = 262144     # absolute max for most models
+    lo = 8000  # minimum useful context
+    hi = 262144  # absolute max for most models
     best = lo
     step_count = 0
     max_steps = 18  # log2(262144/8000) ≈ 15, add margin
@@ -2104,7 +2141,8 @@ def _calibrate_model_sync(
         _calibration_status.update(
             phase="error",
             message=f"Model '{model_id}' failed to load even at {lo:,} context. Check GPU memory.",
-            running=False, progress=100,
+            running=False,
+            progress=100,
         )
         return {"error": f"Cannot load model at minimum context {lo}"}
     best = lo
@@ -2133,7 +2171,11 @@ def _calibrate_model_sync(
     if safe_best < 8000:
         safe_best = 8000
 
-    status("benchmark", f"Optimal context: {safe_best:,} tokens. Loading for benchmark...", 80)
+    status(
+        "benchmark",
+        f"Optimal context: {safe_best:,} tokens. Loading for benchmark...",
+        80,
+    )
 
     # Load the final config for benchmarking
     try_load_config(safe_best)
@@ -2143,7 +2185,11 @@ def _calibrate_model_sync(
     status("benchmark", "Running speed benchmark...", 85)
     benchmark = run_speed_benchmark()
 
-    status("done", f"Calibration complete! Optimal: {safe_best:,} tokens @ {benchmark['generation_speed']} tok/s", 100)
+    status(
+        "done",
+        f"Calibration complete! Optimal: {safe_best:,} tokens @ {benchmark['generation_speed']} tok/s",
+        100,
+    )
 
     result = {
         "model_id": model_id,
@@ -2156,23 +2202,28 @@ def _calibrate_model_sync(
     }
 
     _calibration_status.update(
-        phase="done", running=False, progress=100,
+        phase="done",
+        running=False,
+        progress=100,
         result=result,
         message=f"Calibration complete! Optimal context: {safe_best:,} tokens, "
-                f"Generation: {benchmark['generation_speed']} tok/s, "
-                f"Evaluation: {benchmark['evaluation_speed']} tok/s",
+        f"Generation: {benchmark['generation_speed']} tok/s, "
+        f"Evaluation: {benchmark['evaluation_speed']} tok/s",
     )
 
     return result
 
 
 def _try_load_via_api(
-    root: str, model_id: str, context_len: int,
-    embedding_model: str | None, api_key: str | None,
+    root: str,
+    model_id: str,
+    context_len: int,
+    embedding_model: str | None,
+    api_key: str | None,
 ) -> bool:
     """Fallback: attempt to verify a model loads by querying the API.
     This is less precise than the CLI approach but works remotely."""
-    import time
+
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -2184,7 +2235,8 @@ def _try_load_via_api(
         }
         req = urlrequest.Request(
             f"{root}/v1/chat/completions",
-            method="POST", headers=headers,
+            method="POST",
+            headers=headers,
             data=json.dumps(payload).encode("utf-8"),
         )
         with urlrequest.urlopen(req, timeout=60) as resp:
@@ -2220,13 +2272,20 @@ async def start_calibration(request: Request):
     if not base_url:
         raise HTTPException(status_code=400, detail="No base_url configured")
 
-    _calibration_status = {"phase": "init", "message": "Starting...", "running": True, "progress": 0}
+    _calibration_status = {
+        "phase": "init",
+        "message": "Starting...",
+        "running": True,
+        "progress": 0,
+    }
 
     import threading
 
     def _run():
         try:
-            result = _calibrate_model_sync(base_url, model_id, api_key or None, embedding_model or None)
+            result = _calibrate_model_sync(
+                base_url, model_id, api_key or None, embedding_model or None
+            )
             # Auto-save the optimal settings if calibration succeeded
             if "error" not in result:
                 with registry.SessionLocal() as session:
@@ -2250,8 +2309,10 @@ async def start_calibration(request: Request):
                     session.commit()
         except Exception as exc:
             _calibration_status.update(
-                phase="error", message=f"Calibration failed: {exc}",
-                running=False, progress=100,
+                phase="error",
+                message=f"Calibration failed: {exc}",
+                running=False,
+                progress=100,
             )
 
     thread = threading.Thread(target=_run, daemon=True)
@@ -2264,7 +2325,12 @@ async def start_calibration(request: Request):
 async def calibration_status(request: Request):
     """Return current calibration progress."""
     _require_admin(request)
-    return _calibration_status or {"phase": "idle", "message": "No calibration running", "running": False, "progress": 0}
+    return _calibration_status or {
+        "phase": "idle",
+        "message": "No calibration running",
+        "running": False,
+        "progress": 0,
+    }
 
 
 @app.get("/api/admin/calibration-result")
