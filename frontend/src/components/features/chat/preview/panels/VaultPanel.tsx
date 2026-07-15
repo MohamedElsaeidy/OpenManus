@@ -3,12 +3,15 @@
  *
  * Replaces the old two-number summary card with an interactive canvas graph
  * showing notes as nodes and wikilinks as edges, plus an import button.
+ * Supports dynamic auto-resizing, zoom (scroll wheel / buttons), and click-to-drag panning.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAsync } from '@/hooks/use-async';
 import { getObsidianGraph, importObsidianNotes, type ObsidianGraph } from '@/services/conversations';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Maximize2, Minus, Plus } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -38,7 +41,6 @@ interface SimEdge {
 
 function initSimulation(graph: ObsidianGraph, width: number, height: number) {
   const nodeMap = new Map<string, SimNode>();
-  // Count links per node for sizing
   const linkCounts = new Map<string, number>();
   for (const edge of graph.edges) {
     linkCounts.set(edge.source, (linkCounts.get(edge.source) || 0) + 1);
@@ -47,7 +49,7 @@ function initSimulation(graph: ObsidianGraph, width: number, height: number) {
 
   const nodes: SimNode[] = graph.nodes.map((n, i) => {
     const angle = (2 * Math.PI * i) / Math.max(graph.nodes.length, 1);
-    const radius = Math.min(width, height) * 0.3;
+    const radius = Math.min(width, height) * 0.25;
     return {
       id: n.id,
       title: n.title,
@@ -128,9 +130,9 @@ function tickSimulation(
     n.vy *= 0.85;
     n.x += n.vx;
     n.y += n.vy;
-    // Bounds
-    n.x = Math.max(20, Math.min(width - 20, n.x));
-    n.y = Math.max(20, Math.min(height - 20, n.y));
+    // Keep within loose bounds
+    n.x = Math.max(-width, Math.min(width * 2, n.x));
+    n.y = Math.max(-height, Math.min(height * 2, n.y));
   }
 }
 
@@ -147,10 +149,11 @@ const NODE_COLORS = {
 
 function nodeColor(node: SimNode, selectedId: string | null): string {
   if (node.id === selectedId) return NODE_COLORS.selected;
-  if (node.path.includes('workspace-auto-sync')) return NODE_COLORS.autoSync;
+  if (node.path.includes('workspace-auto-sync') || (node.tags && node.tags.includes('sync'))) return NODE_COLORS.autoSync;
   return NODE_COLORS.imported;
 }
 
+// Node radius sizing proportional to link density
 function nodeRadius(node: SimNode): number {
   return Math.min(6 + node.linkCount * 1.5, 18);
 }
@@ -168,14 +171,21 @@ function drawGraph(
   width: number,
   height: number,
   dpr: number,
+  scale: number,
+  offsetX: number,
+  offsetY: number,
 ) {
   ctx.clearRect(0, 0, width * dpr, height * dpr);
   ctx.save();
   ctx.scale(dpr, dpr);
 
+  // Apply pan and zoom transforms
+  ctx.translate(offsetX, offsetY);
+  ctx.scale(scale, scale);
+
   // Edges
-  ctx.lineWidth = 1;
-  ctx.strokeStyle = 'rgba(148, 163, 184, 0.35)';
+  ctx.lineWidth = 1 / scale;
+  ctx.strokeStyle = 'rgba(148, 163, 184, 0.3)';
   for (const edge of edges) {
     const a = nodeMap.get(edge.source);
     const b = nodeMap.get(edge.target);
@@ -205,11 +215,11 @@ function drawGraph(
     ctx.shadowColor = 'transparent';
     ctx.shadowBlur = 0;
 
-    // Label
-    ctx.font = '11px Inter, system-ui, sans-serif';
+    // Label text
+    ctx.font = `${Math.max(10, 11 / Math.sqrt(scale))}px Inter, system-ui, sans-serif`;
     ctx.fillStyle = '#e2e8f0';
     ctx.textAlign = 'center';
-    ctx.fillText(node.title, node.x, node.y + r + 13, 120);
+    ctx.fillText(node.title, node.x, node.y + r + 12 / scale, 140 / scale);
   }
 
   ctx.restore();
@@ -230,7 +240,16 @@ export const VaultPanel = ({ conversationId }: { conversationId: string }) => {
   const simRef = useRef<ReturnType<typeof initSimulation> | null>(null);
   const animRef = useRef<number>(0);
   const alphaRef = useRef(1);
+
+  // Transform states
+  const scaleRef = useRef(1.0);
+  const offsetRef = useRef({ x: 0, y: 0 });
+  const isDraggingRef = useRef(false);
+  const dragStartRef = useRef({ x: 0, y: 0 });
+  const isAnimatingRef = useRef(false);
+
   const [selectedNode, setSelectedNode] = useState<SimNode | null>(null);
+  const selectedNodeRef = useRef<string | null>(null);
   const [importing, setImporting] = useState(false);
 
   const lastSync = graph?.nodes
@@ -239,67 +258,229 @@ export const VaultPanel = ({ conversationId }: { conversationId: string }) => {
     .sort()
     .at(-1) ?? null;
 
-  // Initialize simulation when graph data changes
+  // Animation frame loop
+  const startAnimation = useCallback(() => {
+    if (isAnimatingRef.current) return;
+    isAnimatingRef.current = true;
+
+    const run = () => {
+      const canvas = canvasRef.current;
+      if (!canvas || !simRef.current) {
+        isAnimatingRef.current = false;
+        return;
+      }
+
+      const rect = canvas.getBoundingClientRect();
+      const w = rect.width || 600;
+      const h = rect.height || 400;
+
+      let needsNextFrame = false;
+
+      if (alphaRef.current >= 0.005) {
+        tickSimulation(
+          simRef.current.nodes,
+          simRef.current.edges,
+          simRef.current.nodeMap,
+          w,
+          h,
+          alphaRef.current,
+        );
+        alphaRef.current *= 0.98;
+        needsNextFrame = true;
+      }
+
+      // Draw the frame
+      const ctx = canvas.getContext('2d');
+      const dpr = window.devicePixelRatio || 1;
+      if (ctx) {
+        drawGraph(
+          ctx,
+          simRef.current.nodes,
+          simRef.current.edges,
+          simRef.current.nodeMap,
+          selectedNodeRef.current,
+          w,
+          h,
+          dpr,
+          scaleRef.current,
+          offsetRef.current.x,
+          offsetRef.current.y,
+        );
+      }
+
+      if (needsNextFrame || isDraggingRef.current) {
+        animRef.current = requestAnimationFrame(run);
+      } else {
+        isAnimatingRef.current = false;
+      }
+    };
+
+    run();
+  }, []);
+
+  // Set up resize observer to dynamically adjust canvas size
   useEffect(() => {
-    if (!graph || !graph.nodes.length || !canvasRef.current) return;
     const canvas = canvasRef.current;
-    const rect = canvas.getBoundingClientRect();
-    const w = rect.width || 600;
-    const h = rect.height || 400;
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = w * dpr;
-    canvas.height = h * dpr;
+    if (!canvas || !graph || !graph.nodes.length) return;
 
-    const sim = initSimulation(graph, w, h);
-    simRef.current = sim;
-    alphaRef.current = 1;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = width * dpr;
+        canvas.height = height * dpr;
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+        // Initialize simulation coordinates if not done yet
+        if (!simRef.current) {
+          simRef.current = initSimulation(graph, width, height);
+        }
 
-    function animate() {
-      if (!simRef.current || alphaRef.current < 0.01) return;
-      tickSimulation(simRef.current.nodes, simRef.current.edges, simRef.current.nodeMap, w, h, alphaRef.current);
-      drawGraph(ctx!, simRef.current.nodes, simRef.current.edges, simRef.current.nodeMap, selectedNode?.id ?? null, w, h, dpr);
-      alphaRef.current *= 0.99;
-      animRef.current = requestAnimationFrame(animate);
-    }
-    animate();
+        alphaRef.current = Math.max(alphaRef.current, 0.05);
+        startAnimation();
+      }
+    });
 
-    return () => cancelAnimationFrame(animRef.current);
-  }, [graph, selectedNode]);
+    observer.observe(canvas);
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(animRef.current);
+    };
+  }, [graph, startAnimation]);
 
-  // Click handler for node selection
-  const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+  // Handle wheel zoom with anchor point locking
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const handleWheelEvent = (e: WheelEvent) => {
+      e.preventDefault();
+      const zoomFactor = 1.08;
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+
+      // Graph coordinates before zoom
+      const gx = (mx - offsetRef.current.x) / scaleRef.current;
+      const gy = (my - offsetRef.current.y) / scaleRef.current;
+
+      let nextScale = scaleRef.current;
+      if (e.deltaY < 0) {
+        nextScale = Math.min(scaleRef.current * zoomFactor, 4.0);
+      } else {
+        nextScale = Math.max(scaleRef.current / zoomFactor, 0.25);
+      }
+
+      // New offsets anchoring the mouse position
+      offsetRef.current = {
+        x: mx - gx * nextScale,
+        y: my - gy * nextScale,
+      };
+      scaleRef.current = nextScale;
+
+      startAnimation();
+    };
+
+    canvas.addEventListener('wheel', handleWheelEvent, { passive: false });
+    return () => {
+      canvas.removeEventListener('wheel', handleWheelEvent);
+    };
+  }, [startAnimation]);
+
+  // Click & drag panning and node selection
+  const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!simRef.current || !canvasRef.current) return;
     const rect = canvasRef.current.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
 
-    let closest: SimNode | null = null;
+    // Convert mouse to graph space coords
+    const gx = (mx - offsetRef.current.x) / scaleRef.current;
+    const gy = (my - offsetRef.current.y) / scaleRef.current;
+
+    let clickedNode: SimNode | null = null;
     let minDist = Infinity;
     for (const node of simRef.current.nodes) {
-      const dx = node.x - mx;
-      const dy = node.y - my;
+      const dx = node.x - gx;
+      const dy = node.y - gy;
       const dist = Math.sqrt(dx * dx + dy * dy);
       const r = nodeRadius(node);
-      if (dist < r + 8 && dist < minDist) {
-        closest = node;
+      if (dist < r + 10 && dist < minDist) {
+        clickedNode = node;
         minDist = dist;
       }
     }
-    setSelectedNode(closest);
-    // Re-render with selection highlight
-    alphaRef.current = Math.max(alphaRef.current, 0.02);
-    if (canvasRef.current) {
-      const ctx = canvasRef.current.getContext('2d');
-      const rect2 = canvasRef.current.getBoundingClientRect();
-      const dpr = window.devicePixelRatio || 1;
-      if (ctx && simRef.current) {
-        drawGraph(ctx, simRef.current.nodes, simRef.current.edges, simRef.current.nodeMap, closest?.id ?? null, rect2.width, rect2.height, dpr);
-      }
+
+    if (clickedNode) {
+      setSelectedNode(clickedNode);
+      selectedNodeRef.current = clickedNode.id;
+      alphaRef.current = Math.max(alphaRef.current, 0.05);
+      startAnimation();
+    } else {
+      isDraggingRef.current = true;
+      dragStartRef.current = { x: e.clientX, y: e.clientY };
+      startAnimation();
     }
+  }, [startAnimation]);
+
+  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!isDraggingRef.current) return;
+    const dx = e.clientX - dragStartRef.current.x;
+    const dy = e.clientY - dragStartRef.current.y;
+    dragStartRef.current = { x: e.clientX, y: e.clientY };
+
+    offsetRef.current = {
+      x: offsetRef.current.x + dx,
+      y: offsetRef.current.y + dy,
+    };
+
+    startAnimation();
+  }, [startAnimation]);
+
+  const handleMouseUpOrLeave = useCallback(() => {
+    isDraggingRef.current = false;
   }, []);
+
+  // UI Zoom controls
+  const zoomIn = useCallback(() => {
+    if (!canvasRef.current) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const cx = rect.width / 2;
+    const cy = rect.height / 2;
+    const gx = (cx - offsetRef.current.x) / scaleRef.current;
+    const gy = (cy - offsetRef.current.y) / scaleRef.current;
+
+    const nextScale = Math.min(scaleRef.current * 1.25, 4.0);
+    offsetRef.current = {
+      x: cx - gx * nextScale,
+      y: cy - gy * nextScale,
+    };
+    scaleRef.current = nextScale;
+    startAnimation();
+  }, [startAnimation]);
+
+  const zoomOut = useCallback(() => {
+    if (!canvasRef.current) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const cx = rect.width / 2;
+    const cy = rect.height / 2;
+    const gx = (cx - offsetRef.current.x) / scaleRef.current;
+    const gy = (cy - offsetRef.current.y) / scaleRef.current;
+
+    const nextScale = Math.max(scaleRef.current / 1.25, 0.25);
+    offsetRef.current = {
+      x: cx - gx * nextScale,
+      y: cy - gy * nextScale,
+    };
+    scaleRef.current = nextScale;
+    startAnimation();
+  }, [startAnimation]);
+
+  const resetView = useCallback(() => {
+    scaleRef.current = 1.0;
+    offsetRef.current = { x: 0, y: 0 };
+    alphaRef.current = 1.0;
+    startAnimation();
+  }, [startAnimation]);
 
   // Import handler
   const handleImport = useCallback(async () => {
@@ -319,13 +500,13 @@ export const VaultPanel = ({ conversationId }: { conversationId: string }) => {
           const content = await file.text();
           const path = file.webkitRelativePath || file.name;
           const title = file.name.replace(/\.md$/, '');
-          // Extract tags
           const tagMatches = content.match(/(^|\s)#([A-Za-z0-9_\-/]+)/g) || [];
           const tags = tagMatches.map(t => t.trim().replace(/^#/, '')).filter(Boolean);
           notes.push({ path, title, content, tags });
         }
         if (notes.length > 0) {
           await importObsidianNotes(conversationId, notes);
+          simRef.current = null;
           refresh();
         }
       } catch (err) {
@@ -337,7 +518,7 @@ export const VaultPanel = ({ conversationId }: { conversationId: string }) => {
     input.click();
   }, [conversationId, refresh]);
 
-  // Compute connected nodes for selected
+  // Compute connected nodes for selected sidebar details
   const connectedIds = new Set<string>();
   if (selectedNode && graph) {
     for (const edge of graph.edges) {
@@ -377,10 +558,10 @@ export const VaultPanel = ({ conversationId }: { conversationId: string }) => {
         <CardHeader className="pb-2">
           <CardTitle className="text-base">Knowledge Graph</CardTitle>
           <CardDescription>
-            Obsidian vault notes and wikilink connections. Click a node to inspect.
+            Obsidian vault notes and links. Drag to pan. Scroll to zoom. Click nodes to inspect.
           </CardDescription>
         </CardHeader>
-        <CardContent className="relative min-h-0 flex-1">
+        <CardContent className="relative min-h-0 flex-1 overflow-hidden p-2">
           {isLoading ? (
             <div className="text-muted-foreground flex h-full items-center justify-center text-sm">
               Loading vault graph…
@@ -394,49 +575,76 @@ export const VaultPanel = ({ conversationId }: { conversationId: string }) => {
             </div>
           ) : (
             <div className="flex h-full min-h-0 gap-3">
-              {/* Canvas */}
-              <canvas
-                ref={canvasRef}
-                onClick={handleCanvasClick}
-                className="min-h-0 flex-1 cursor-crosshair rounded-md border border-slate-700/50"
-                style={{ background: 'rgba(15, 23, 42, 0.6)' }}
-              />
+              {/* Canvas Container with floating controls */}
+              <div className="relative flex-1 min-w-0 h-full">
+                <canvas
+                  ref={canvasRef}
+                  onMouseDown={handleMouseDown}
+                  onMouseMove={handleMouseMove}
+                  onMouseUp={handleMouseUpOrLeave}
+                  onMouseLeave={handleMouseUpOrLeave}
+                  className="w-full h-full cursor-grab active:cursor-grabbing rounded-md border border-slate-700/50"
+                  style={{ background: 'rgba(15, 23, 42, 0.6)' }}
+                />
+
+                {/* Floating zoom controls overlay */}
+                <div className="absolute bottom-3 left-3 flex items-center gap-1.5 rounded-md bg-slate-900/80 p-1.5 border border-slate-700/50 backdrop-blur-sm">
+                  <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-300 hover:text-white" onClick={zoomIn} title="Zoom In">
+                    <Plus className="h-4 w-4" />
+                  </Button>
+                  <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-300 hover:text-white" onClick={zoomOut} title="Zoom Out">
+                    <Minus className="h-4 w-4" />
+                  </Button>
+                  <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-300 hover:text-white" onClick={resetView} title="Reset View">
+                    <Maximize2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </div>
 
               {/* Detail sidebar */}
               {selectedNode && (
-                <div className="flex w-56 flex-col gap-2 overflow-auto rounded-md border border-slate-700/50 p-3">
+                <div className="flex w-56 flex-col gap-2 overflow-auto rounded-md border border-slate-700/50 p-3 bg-slate-900/30">
                   <div className="text-sm font-semibold text-amber-400">{selectedNode.title}</div>
-                  <div className="text-muted-foreground truncate font-mono text-xs">{selectedNode.path}</div>
+                  <div className="text-muted-foreground truncate font-mono text-xs" title={selectedNode.path}>
+                    {selectedNode.path}
+                  </div>
                   {selectedNode.tags.length > 0 && (
                     <div className="flex flex-wrap gap-1">
                       {selectedNode.tags.slice(0, 8).map(tag => (
-                        <Badge key={tag} variant="secondary" className="text-xs">
+                        <Badge key={tag} variant="secondary" className="text-[10px] px-1 py-0">
                           #{tag}
                         </Badge>
                       ))}
                     </div>
                   )}
-                  <div className="text-muted-foreground text-xs">
+                  <div className="text-muted-foreground text-xs mt-1 border-t border-slate-800 pt-1">
                     {connectedIds.size} connection{connectedIds.size !== 1 ? 's' : ''}
                   </div>
                   {connectedIds.size > 0 && (
-                    <div className="space-y-1">
-                      <div className="text-muted-foreground text-xs font-medium">Linked to:</div>
-                      {Array.from(connectedIds).slice(0, 12).map(id => {
-                        const linked = graph?.nodes.find(n => n.id === id);
-                        return linked ? (
-                          <div
-                            key={id}
-                            className="cursor-pointer truncate text-xs text-indigo-400 hover:underline"
-                            onClick={() => {
-                              const simNode = simRef.current?.nodeMap.get(id);
-                              if (simNode) setSelectedNode(simNode);
-                            }}
-                          >
-                            {linked.title}
-                          </div>
-                        ) : null;
-                      })}
+                    <div className="space-y-1 mt-1">
+                      <div className="text-muted-foreground text-[10px] font-medium uppercase tracking-wider">Linked to:</div>
+                      <div className="space-y-1 max-h-48 overflow-y-auto pr-1">
+                        {Array.from(connectedIds).map(id => {
+                          const linked = graph?.nodes.find(n => n.id === id);
+                          return linked ? (
+                            <div
+                              key={id}
+                              className="cursor-pointer truncate text-xs text-indigo-400 hover:underline hover:text-indigo-300 transition"
+                              onClick={() => {
+                                const simNode = simRef.current?.nodeMap.get(id);
+                                if (simNode) {
+                                  setSelectedNode(simNode);
+                                  selectedNodeRef.current = simNode.id;
+                                  alphaRef.current = Math.max(alphaRef.current, 0.05);
+                                  startAnimation();
+                                }
+                              }}
+                            >
+                              {linked.title}
+                            </div>
+                          ) : null;
+                        })}
+                      </div>
                     </div>
                   )}
                 </div>
