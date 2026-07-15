@@ -8,12 +8,13 @@ import { useState } from 'react';
 interface ChatInputProps {
   taskId?: string;
   status?: 'idle' | 'thinking' | 'terminating' | 'completed';
+  defaultValue?: string;
   onSubmit?: (value: { taskId?: string; prompt: string }) => Promise<void>;
   onTerminate?: () => Promise<void>;
 }
 
-export const ChatInput = ({ taskId, status = 'idle', onSubmit, onTerminate }: ChatInputProps) => {
-  const [value, setValue] = useState('');
+export const ChatInput = ({ taskId, status = 'idle', defaultValue = '', onSubmit, onTerminate }: ChatInputProps) => {
+  const [value, setValue] = useState(defaultValue);
 
   const handleKeyDown = async (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {

@@ -10,10 +10,14 @@ import { LoaderIcon, SquareTerminalIcon } from 'lucide-react';
 export const LiveActivityPanel = ({ messages }: { messages: Message[] }) => {
   const recent = [...messages]
     .filter(
-      message =>
-        Boolean(message.type) &&
-        message.type !== 'agent:lifecycle:step:act:tool:terminal:output' &&
-        message.type !== 'agent:plan:updated',
+      message => {
+        const type = String(message.type || '');
+        return (
+          Boolean(type) &&
+          type !== 'agent:lifecycle:step:act:tool:terminal:output' &&
+          type !== 'agent:plan:updated'
+        );
+      },
     )
     .slice(-24)
     .reverse();
@@ -26,7 +30,7 @@ export const LiveActivityPanel = ({ messages }: { messages: Message[] }) => {
 
   // Latest non-deleted plan state
   const latestPlan = [...messages]
-    .filter(m => m.type === 'agent:plan:updated' && !m.content.deleted)
+    .filter(m => String(m.type || '') === 'agent:plan:updated' && !m.content.deleted)
     .at(-1)?.content ?? null;
 
   const status = recent.find(message => message.type === 'agent:lifecycle:complete')

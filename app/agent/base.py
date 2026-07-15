@@ -153,7 +153,10 @@ class BaseAgent(BaseModel, ABC):
                     if self.is_stuck():
                         self.handle_stuck_state(task)
 
-                    results.append(f"Step {self.current_step}: {step_result}")
+                    if self.state == AgentState.FINISHED and step_result:
+                        results.append(str(step_result))
+                    else:
+                        results.append(f"Step {self.current_step}: {step_result}")
                     task.emit(
                         "step_result",
                         {"step": self.current_step, "result": step_result},

@@ -2,9 +2,9 @@
 
 Key design decisions:
 1. NO regex-based finish detection. The model terminates ONLY by calling
-   the `terminate` tool with `status` + `summary`. Text-only responses
-   without tool calls are treated as incomplete — the agent is nudged to
-   act or terminate, with a hard cap on retries.
+   the `terminate` tool with `status` + `summary` when it has used tools or
+   needs to report structured completion. Text-only responses without tool
+   calls are valid direct conversational answers and finish the turn.
 2. Error detection uses `ToolResult.is_error`, not string prefix matching.
 3. Retry count is configurable per-tool (`can_retry` flag) and per-agent
    (`max_tool_retries`). Retry failures are emitted to the event stream,
@@ -44,10 +44,6 @@ TOOL_CALL_REQUIRED = "Tool calls required but none provided"
 
 OBSERVE_ONLY_TOOLS = {"codebase_overview", "glob", "grep", "read_files"}
 
-# Maximum number of consecutive text-only (no tool call) responses before
-# the loop force-terminates with a failure status.
-_MAX_NO_TOOL_RETRIES = 3
-
 # For external import compatibility (consumers that imported the old regex).
 # This is a no-op sentinel; the regex is dead.
 FINAL_RESPONSE_RE = None
@@ -74,7 +70,6 @@ class ToolCallAgent(ReActAgent):
     tool_calls: List[ToolCall] = Field(default_factory=list)
     _current_base64_image: Optional[str] = None
     _last_assistant_content: str = ""
-    _consecutive_no_tool_responses: int = 0
     _consecutive_observe_only_steps: int = 0
 
     max_steps: int = config.agent.max_steps
@@ -252,62 +247,26 @@ class ToolCallAgent(ReActAgent):
             if self.tool_choices == ToolChoice.REQUIRED and not self.tool_calls:
                 return True  # Will be handled in act()
 
-            # --- STRUCTURAL FINISH DETECTION (no regex) ---
-            # If the model returned text without tool calls, it has NOT
-            # terminated. We nudge it to act or call terminate.
+            # --- DIRECT RESPONSE FINISH DETECTION (no regex) ---
+            # A text-only AUTO response is a valid conversational terminal
+            # state. Do not force a tool call for greetings, explanations, or
+            # other answers that need no external action.
             if self.tool_choices == ToolChoice.AUTO and not self.tool_calls:
                 if content.strip():
-                    self._consecutive_no_tool_responses += 1
-
-                    if self._consecutive_no_tool_responses >= _MAX_NO_TOOL_RETRIES:
-                        # Hard cap: force-terminate with failure
-                        task.emit(
-                            "warning",
-                            {
-                                "message": (
-                                    f"Model returned {self._consecutive_no_tool_responses} "
-                                    "consecutive text-only responses without calling any tool. "
-                                    "Force-terminating with failure."
-                                )
-                            },
-                        )
-                        task.emit(
-                            "finish_signal",
-                            {
-                                "tool": "terminate",
-                                "message": content.strip(),
-                                "reason": "Auto-terminated: model refused to use tools or call terminate.",
-                                "status": "failure",
-                            },
-                        )
-                        self.state = AgentState.FINISHED
-                        return False
-
-                    # Nudge: tell the model it MUST act or terminate
                     task.emit(
-                        "warning",
+                        "finish_signal",
                         {
-                            "message": (
-                                f"Model returned text without tool calls "
-                                f"({self._consecutive_no_tool_responses}/{_MAX_NO_TOOL_RETRIES}). "
-                                "Requesting explicit action or termination."
-                            )
+                            "message": content.strip(),
+                            "reason": "Model returned a direct response without tool calls.",
+                            "status": "success",
+                            "direct_response": True,
                         },
                     )
-                    self.memory.add_message(
-                        Message.user_message(
-                            "You MUST either call a tool to make progress, or call "
-                            "`terminate` with status='success' and a summary if the task "
-                            "is complete, or status='failure' and a reason if blocked. "
-                            "Do NOT respond with text only."
-                        )
-                    )
-                    return True  # Loop back to think again
+                    self.state = AgentState.FINISHED
+                    return False
 
                 return bool(content)
 
-            # Model called tools — reset the no-tool counter
-            self._consecutive_no_tool_responses = 0
             return bool(self.tool_calls)
 
         except Exception as e:

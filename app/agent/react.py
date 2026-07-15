@@ -95,15 +95,19 @@ class ReActAgent(BaseAgent, ABC):
 
         if not should_act:
             self._transition_phase(AgentPhase.DONE, task)
+            direct_response = str(
+                getattr(self, "_last_assistant_content", "") or ""
+            ).strip()
             task.emit(
                 "agent:lifecycle:step:complete",
                 {
                     "step": self.current_step,
                     "outcome": "no_action",
-                    "summary": "Thinking complete — no tool action required.",
+                    "summary": direct_response
+                    or "Thinking complete — no tool action required.",
                 },
             )
-            return "Thinking complete - no action needed"
+            return direct_response or "Thinking complete - no action needed"
 
         # ── Act ───────────────────────────────────────────────────────────
         self._transition_phase(AgentPhase.ACT, task)

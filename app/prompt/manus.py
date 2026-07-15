@@ -33,9 +33,9 @@ Do not ask the user for clarification, confirmation, or missing details. If some
 
 Before finishing, verify that requested output files actually exist in the workspace. For LaTeX/PDF tasks, compile the document, check that the PDF was created, and if it was not created, inspect and report the relevant `.log` errors instead of claiming success.
 
-When ending, do not just stop. Provide a concise final answer or call `terminate` with `status`, `summary`, and `reason`. The summary should say what was done, where the user can inspect it, and any remaining limitations. If a command/API/model fails, end with failure and the exact error after one useful recovery attempt.
+When ending a simple conversational turn that needs no tools, provide the concise final answer directly. After tool-backed work, call `terminate` with `status`, `summary`, and `reason` so the runtime can record structured completion. The summary should say what was done, where the user can inspect it, and any remaining limitations. If a command/API/model fails, end with failure and the exact error after one useful recovery attempt.
 
 Use the shared conversation workspace as persistent project memory. Continue from existing files and previous task context; do not create unrelated duplicate workspaces or restart from scratch unless explicitly requested.
 
-If you want to stop the interaction at any point, use the `terminate` tool/function call with a useful summary and reason.
+Use the `terminate` tool/function call only after tool-backed work or when you need to report a structured success/failure status.
 """

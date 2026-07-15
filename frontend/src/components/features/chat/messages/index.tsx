@@ -43,15 +43,23 @@ interface CompletionMessageProps {
       paths: string[];
     } | null;
   }>;
+  assistantText?: string;
 }
 
-const CompletionMessage = ({ message }: CompletionMessageProps) => {
+const normalizeMessageText = (value: string) => value.trim().replace(/\s+/g, ' ');
+
+const CompletionMessage = ({ message, assistantText = '' }: CompletionMessageProps) => {
   const showTokenCount = message.content.total_input_tokens || message.content.total_completion_tokens;
   const workspace = message.content.workspace;
   const pdfCount = workspace?.pdfs?.length || 0;
   const logCount = workspace?.logs?.length || 0;
   const planProgress = message.content.plan_progress || null;
   const changeSummary = message.content.change_summary || null;
+  const completionText = message.content.message || '';
+  const showCompletionText =
+    completionText &&
+    completionText !== 'Task completed' &&
+    normalizeMessageText(completionText) !== normalizeMessageText(assistantText);
   return (
     <div className="inline-flex max-w-full flex-col gap-2">
       <Badge className="w-fit font-mono" variant="outline">
@@ -68,7 +76,7 @@ const CompletionMessage = ({ message }: CompletionMessageProps) => {
           </>
         )}
       </Badge>
-      {message.content.message && message.content.message !== 'Task completed' && <Markdown className="chat">{message.content.message}</Markdown>}
+      {showCompletionText && <Markdown className="chat">{completionText}</Markdown>}
       {message.content.reason && <div className="text-muted-foreground text-xs">Reason: {message.content.reason}</div>}
       {workspace?.warning && (
         <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
@@ -263,7 +271,7 @@ const LifecycleMessage = ({ message }: { message: AggregatedMessage }) => {
                 {stepMessages.length ? stepMessages.map((step, index) => <StepMessage key={String(step.index || index)} message={step} />) : <div className="p-2 text-sm text-muted-foreground">No trace yet.</div>}
               </div>
             </details>
-            {completeMessage && <CompletionMessage message={completeMessage} />}
+            {completeMessage && <CompletionMessage message={completeMessage} assistantText={assistantText} />}
             {terminatedMessage && <TerminatedMessage message={terminatedMessage} />}
           </div>
         </div>
