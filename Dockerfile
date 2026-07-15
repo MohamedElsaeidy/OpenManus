@@ -42,7 +42,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt \
+RUN pip install --no-cache-dir --no-deps -r requirements.txt \
     && playwright install chromium \
     && python -c "import cloakbrowser; cloakbrowser.ensure_binary()" \
     && echo "CloakBrowser binary pre-downloaded"
