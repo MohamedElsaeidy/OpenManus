@@ -14,7 +14,7 @@ import {
   type IntegrationsHealth,
 } from '@/services/conversations';
 import { createTask, getTask, getTaskEvents, sendTaskMessage, terminateTask } from '@/services/tasks';
-import { GaugeIcon, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { GaugeIcon, LoaderCircle, PanelRightClose, PanelRightOpen, Radio, Zap } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -51,6 +51,7 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
   const isTaskCompletedRef = useRef(false);
   const shouldAutoScrollRef = useRef(false);
   const seenEventKeysRef = useRef<Set<string>>(new Set());
+  const messagesRef = useRef<Message[]>([]);
 
   const { containerRef: messagesContainerRef, shouldAutoScroll, handleScroll, scrollToBottom } = useAutoScroll();
   const visibleMessages = useMemo(() => {
@@ -69,11 +70,22 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
     shouldAutoScrollRef.current = shouldAutoScroll;
   }, [shouldAutoScroll]);
 
-  const toMessage = useCallback((data: any): Message => {
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  const toMessage = useCallback((data: {
+    id?: string;
+    task_id?: string;
+    name?: string;
+    content?: Record<string, unknown>;
+    created_at?: string | null;
+  }): Message => {
     const key = data.id || `${data.task_id || ''}:${data.name}:${JSON.stringify(data.content || {})}`;
     return {
       ...data,
       index: key,
+      content: data.content || {},
       createdAt: data.created_at ? new Date(data.created_at) : undefined,
       type: data.name as Message['type'],
       role: 'assistant' as const,
@@ -89,7 +101,10 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
         screenshot: newMessage.content.screenshot,
       });
     }
-    if (newMessage.type === 'agent:lifecycle:step:act:tool:execute:start') {
+    if (
+      newMessage.type === 'agent:lifecycle:step:act:tool:execute:start' &&
+      newMessage.content.name !== 'terminate'
+    ) {
       setPreviewData({ type: 'tool', toolId: newMessage.content.id });
     }
     if (newMessage.type === 'agent:lifecycle:step:act:tool:file:updated') {
@@ -148,7 +163,7 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
           }
 
           // --- Token counter ---
-          if (data.name === 'agent:lifecycle:token_count') {
+          if (data.name === 'agent:lifecycle:step:think:token:count') {
             const total = Number((data.content?.total_input ?? 0)) + Number((data.content?.total_completion ?? 0));
             if (total > 0) setTotalTokens(total);
           }
@@ -284,7 +299,7 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
         seenEventKeysRef.current.add(key);
         return toMessage({ ...event, id: key });
       });
-      if (nextMessages.length === 0 && messages.length > 0) {
+      if (nextMessages.length === 0 && messagesRef.current.length > 0) {
         // Keep current UI state instead of wiping chat on an empty history payload.
         setConversationId(targetConversationId);
         setActiveConversationId(targetConversationId);
@@ -496,36 +511,34 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
   return (
     <div className="flex h-full w-full flex-row justify-between">
       <div className="flex min-w-0 flex-1 flex-col border-r bg-background">
-        <div className="flex h-12 items-center gap-2 border-b px-5">
-          <div className="font-semibold">OpenManus</div>
+        <div className="flex h-12 items-center gap-2 border-b px-3 sm:px-5">
+          <div className="shrink-0 font-semibold">OpenManus</div>
           {isThinking ? (
-            <div className="text-xs text-muted-foreground">Working</div>
+            <div className="hidden items-center gap-1.5 text-xs text-muted-foreground sm:flex">
+              <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+              Working
+            </div>
           ) : lastFinishedAt ? (
-            <div className="text-xs text-muted-foreground">
+            <div className="hidden text-xs text-muted-foreground sm:block">
               Idle · last completed {lastFinishedAt.toLocaleTimeString()}
             </div>
           ) : (
-            <div className="text-xs text-muted-foreground">Idle</div>
+            <div className="hidden text-xs text-muted-foreground sm:block">Idle</div>
           )}
-          {/* Step progress pill */}
           {stepProgress && stepProgress.current > 0 && (
-            <div className="flex items-center gap-1.5 rounded-full border bg-muted/40 px-2 py-0.5 text-[11px] text-muted-foreground">
-              <div
-                className="h-1.5 rounded-full bg-primary transition-all"
-                style={{ width: `${Math.min(100, (stepProgress.current / Math.max(stepProgress.max, 1)) * 100)}%`, minWidth: '6px', maxWidth: '60px' }}
-              />
-              <span>Step {stepProgress.current}{stepProgress.max > 0 ? ` / ${stepProgress.max}` : ''}</span>
+            <div className="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+              <span>Step {stepProgress.current}</span>
             </div>
           )}
-          {/* Token counter */}
           {totalTokens > 0 && (
-            <div className="text-[11px] text-muted-foreground tabular-nums" title="Total tokens used in this session">
-              ⚡ {totalTokens.toLocaleString()} tok
+            <div className="hidden items-center gap-1 text-[11px] tabular-nums text-muted-foreground md:flex" title="Total tokens used in this run">
+              <Zap className="h-3 w-3" />
+              {totalTokens.toLocaleString()}
             </div>
           )}
           <div className="ml-auto flex items-center gap-2">
             <button
-              className="inline-flex h-7 items-center gap-1 rounded border px-2 text-[11px] hover:bg-muted"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md border hover:bg-muted"
               onClick={() => {
                 setIsPreviewCollapsed(false);
                 setPreviewData({ type: 'live' });
@@ -533,18 +546,18 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
               title="Open live monitor"
               aria-label="Open live monitor"
             >
-              Live
+              <Radio className="size-3.5" />
             </button>
             <button
-              className="inline-flex h-7 w-7 items-center justify-center rounded border hover:bg-muted"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md border hover:bg-muted"
               onClick={() => setIsPreviewCollapsed(current => !current)}
               title={isPreviewCollapsed ? 'Show Manus computer panel' : 'Hide Manus computer panel'}
               aria-label={isPreviewCollapsed ? 'Show Manus computer panel' : 'Hide Manus computer panel'}
             >
-              {isPreviewCollapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
+              {isPreviewCollapsed ? <PanelRightOpen className="size-4" /> : <PanelRightClose className="size-4" />}
             </button>
             <button
-              className={`inline-flex h-7 items-center gap-1 rounded border px-2 text-[11px] hover:bg-muted ${performanceMode ? 'border-emerald-500/40 text-emerald-600' : ''}`}
+              className={`inline-flex h-8 w-8 items-center justify-center rounded-md border hover:bg-muted ${performanceMode ? 'border-emerald-500/50 text-emerald-600' : ''}`}
               onClick={() => {
                 setPerformanceMode(prev => {
                   const next = !prev;
@@ -556,14 +569,13 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
               aria-label="Toggle performance mode"
             >
               <GaugeIcon className="size-3.5" />
-              {performanceMode ? 'Perf On' : 'Perf Off'}
             </button>
           </div>
         </div>
         <div className="relative flex h-full flex-col">
           <div
             ref={messagesContainerRef}
-            className="h-full space-y-4 overflow-y-auto p-4 pb-60"
+            className="h-full space-y-4 overflow-y-auto p-3 pb-48 sm:p-5 sm:pb-52"
             style={{
               scrollBehavior: 'smooth',
               overscrollBehavior: 'contain',

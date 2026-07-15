@@ -2,7 +2,7 @@ import { confirm } from '@/components/block/confirm';
 import { Button } from '@/components/ui/button';
 import { DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
-import { PauseCircle, Rocket, Send } from 'lucide-react';
+import { Plus, Send, Square } from 'lucide-react';
 import { useState } from 'react';
 
 interface ChatInputProps {
@@ -55,22 +55,23 @@ export const ChatInput = ({ taskId, status = 'idle', defaultValue = '', onSubmit
   };
 
   return (
-    <div className="pointer-events-none absolute right-0 bottom-0 left-0 p-4">
-      <div className="pointer-events-auto mx-auto flex w-full max-w-2xl flex-col gap-2">
-        {status !== 'idle' && (
-          <div className="flex justify-center gap-2">
+    <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-background/95 px-3 pb-3 pt-3 backdrop-blur-sm sm:px-4 sm:pb-4">
+      <div className="pointer-events-auto mx-auto flex w-full max-w-3xl flex-col gap-2">
+        {status === 'completed' && (
+          <div className="flex justify-center">
             <Button
               variant="outline"
-              className="flex cursor-pointer items-center gap-2 rounded-full"
+              size="sm"
+              className="bg-background"
               type="button"
               onClick={() => (window.location.href = '/')}
             >
-              <Rocket className="h-4 w-4" />
-              <span>New Task</span>
+              <Plus className="h-4 w-4" />
+              New task
             </Button>
           </div>
         )}
-        <div className="bg-background dark:bg-background flex w-full flex-col rounded-2xl shadow-[0_0_15px_rgba(0,0,0,0.1)] dark:border">
+        <div className="flex w-full flex-col rounded-xl border bg-background shadow-lg shadow-black/5">
           <Textarea
             value={value}
             onChange={e => setValue(e.target.value)}
@@ -85,7 +86,7 @@ export const ChatInput = ({ taskId, status = 'idle', defaultValue = '', onSubmit
                     ? 'Send a follow-up in this conversation'
                     : 'Send message to Manus'
             }
-            className="min-h-[80px] flex-1 resize-none border-none bg-transparent px-4 py-3 shadow-none outline-none focus-visible:ring-0 focus-visible:ring-offset-0 dark:bg-transparent"
+            className="min-h-[58px] max-h-40 flex-1 resize-none border-none bg-transparent px-4 py-3 shadow-none outline-none focus-visible:ring-0 focus-visible:ring-offset-0 dark:bg-transparent"
           />
           <div className="border-border flex items-center justify-between border-t px-4 py-2">
             <div />
@@ -94,12 +95,12 @@ export const ChatInput = ({ taskId, status = 'idle', defaultValue = '', onSubmit
                 type="button"
                 size="icon"
                 variant="ghost"
-                className="h-8 w-8 cursor-pointer rounded-xl"
+                className="h-8 w-8 cursor-pointer rounded-md"
                 onClick={handleSendClick}
                 disabled={status === 'terminating'}
                 aria-label={status === 'thinking' && !value.trim() ? 'Terminate task' : 'Send message'}
               >
-                {status === 'thinking' && !value.trim() ? <PauseCircle className="h-4 w-4" /> : <Send className="h-4 w-4" />}
+                {status === 'thinking' && !value.trim() ? <Square className="h-3.5 w-3.5" /> : <Send className="h-4 w-4" />}
               </Button>
             </div>
           </div>

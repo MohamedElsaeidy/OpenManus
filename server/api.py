@@ -869,8 +869,9 @@ def _agent_event_to_progress(event: dict) -> list[dict]:
                         + agent:lifecycle:step:think:complete
                         + agent:lifecycle:step:act:start
       tool_result    → agent:lifecycle:step:act:tool:execute:complete
-                        + agent:lifecycle:step:act:complete
-                        + agent:lifecycle:step:complete
+                        + agent:lifecycle:step:act:tool:complete
+      agent:lifecycle:step:complete → agent:lifecycle:step:act:complete
+                                      + agent:lifecycle:step:complete
       finish_signal  → agent:lifecycle:complete
       final_response  → agent:lifecycle:complete
       terminated     → agent:lifecycle:terminated
@@ -984,7 +985,12 @@ def _agent_event_to_progress(event: dict) -> list[dict]:
                 {"id": tool_call_id, "name": tool},
             )
         )
-        msgs.append(_msg("agent:lifecycle:step:act:complete", data))
+        return msgs
+
+    if agent_type == "agent:lifecycle:step:complete":
+        msgs = []
+        if data.get("outcome") == "acted":
+            msgs.append(_msg("agent:lifecycle:step:act:complete", data))
         msgs.append(_msg("agent:lifecycle:step:complete", data))
         return msgs
 
@@ -993,11 +999,20 @@ def _agent_event_to_progress(event: dict) -> list[dict]:
         return []
 
     if agent_type == "finish_signal":
-        # Only map the final completion from tasks.py (which contains 'workspace')
-        # to avoid duplicating the final message that is already shown in the 'thought' bubble.
         if "workspace" in data:
             return [_msg("agent:lifecycle:complete", data)]
-        return []
+        return [
+            _msg(
+                "agent:lifecycle:state:change",
+                {
+                    "state": "finishing",
+                    "final_response": data.get("message", ""),
+                    "final_status": data.get("status", "success"),
+                    "reason": data.get("reason", ""),
+                    "direct_response": bool(data.get("direct_response")),
+                },
+            )
+        ]
 
     if agent_type == "final_response":
         # Ignore since the assistant text is already in the 'thought' event,
@@ -1028,7 +1043,17 @@ def _agent_event_to_progress(event: dict) -> list[dict]:
     if agent_type == "stuck_detected":
         return [_msg("agent:lifecycle:state:change", data)]
 
+    if agent_type == "warning":
+        return [_msg("agent:lifecycle:state:change", {**data, "state": "warning"})]
+
     if agent_type == "error":
+        if not data.get("fatal", True):
+            return [
+                _msg(
+                    "agent:lifecycle:state:change",
+                    {**data, "state": "warning"},
+                )
+            ]
         msgs = [_msg("agent:lifecycle:step:error", data)]
         if data.get("fatal", True):
             msgs.append(
@@ -1045,7 +1070,12 @@ def _agent_event_to_progress(event: dict) -> list[dict]:
             )
         return msgs
 
-    # Catch-all: pass through as a generic step event
+    # These native trace events duplicate the normalized thought/tool/step
+    # messages above and otherwise produce double-prefixed lifecycle names.
+    if agent_type.startswith("agent:lifecycle:"):
+        return []
+
+    # Catch-all: pass through as a generic lifecycle event.
     return [_msg(f"agent:lifecycle:{agent_type}", data)]
 
 
@@ -1276,7 +1306,11 @@ async def query_models(request: Request):
     models: list[dict] = []
     url = ""
     try:
-        if style in {"lm-studio", "lmstudio"} or "1234" in host or "lmstudio" in host.lower():
+        if (
+            style in {"lm-studio", "lmstudio"}
+            or "1234" in host
+            or "lmstudio" in host.lower()
+        ):
             data = _lmstudio_api_request(
                 "GET", host, "/models", token=api_key, timeout=8
             )

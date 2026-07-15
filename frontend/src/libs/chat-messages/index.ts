@@ -100,6 +100,9 @@ class ChatMessageAggregator {
         message.type === 'agent:lifecycle:memory:added' ||
         message.type === 'agent:lifecycle:state:change'
       ) {
+        if (message.type === 'agent:lifecycle:state:change' && !currentLifecycle) {
+          continue;
+        }
         ensureLifecycle(message);
         if (currentLifecycle && 'messages' in currentLifecycle) {
           currentLifecycle.messages.push(message);

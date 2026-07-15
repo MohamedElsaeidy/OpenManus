@@ -6,7 +6,7 @@ import remarkGfm from 'remark-gfm';
 
 export const Markdown: React.FC<{ children: string | null; className?: string }> = ({ children, className }) => {
   return (
-    <div className={cn('markdown-body mt-2 rounded-md p-4', className)}>
+    <div className={cn('markdown-body min-w-0 bg-transparent', className)}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeRaw]}

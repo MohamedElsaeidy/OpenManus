@@ -253,10 +253,12 @@ class ToolCallAgent(ReActAgent):
             # other answers that need no external action.
             if self.tool_choices == ToolChoice.AUTO and not self.tool_calls:
                 if content.strip():
+                    self.final_response = content.strip()
+                    self.final_status = "success"
                     task.emit(
                         "finish_signal",
                         {
-                            "message": content.strip(),
+                            "message": self.final_response,
                             "reason": "Model returned a direct response without tool calls.",
                             "status": "success",
                             "direct_response": True,
@@ -598,7 +600,12 @@ class ToolCallAgent(ReActAgent):
                 if browser_screenshot:
                     self._current_base64_image = browser_screenshot
 
-            await self._handle_special_tool(task=task, name=name, result=result)
+            await self._handle_special_tool(
+                task=task,
+                name=name,
+                result=result,
+                arguments=run_args,
+            )
 
             if hasattr(result, "base64_image") and result.base64_image:
                 self._current_base64_image = result.base64_image
@@ -783,31 +790,25 @@ class ToolCallAgent(ReActAgent):
         if not self._should_finish_execution(name=name, result=result, **kwargs):
             return
 
-        # Extract structured finish information from the terminate tool result
-        summary = self._last_assistant_content or str(result)
-        status = "success"
-        reason = ""
-
-        # Parse the result to extract status/summary/reason if available
-        result_str = str(result)
-        if "status: failure" in result_str.lower():
+        arguments = kwargs.get("arguments") or {}
+        status = str(arguments.get("status") or "success").strip().lower()
+        if status not in {"success", "failure"}:
             status = "failure"
-        if "status: success" in result_str.lower():
-            status = "success"
+        summary = str(arguments.get("summary") or "").strip()
+        reason = str(arguments.get("reason") or "").strip()
+        if not summary:
+            summary = self._last_assistant_content.strip() or str(result).strip()
 
-        # Try to extract reason from result
-        for line in result_str.split("\n"):
-            if line.strip().lower().startswith("reason:"):
-                reason = line.split(":", 1)[1].strip()
-            elif line.strip().lower().startswith("summary:"):
-                summary = line.split(":", 1)[1].strip()
+        self.final_response = summary
+        self.final_status = status
+        self.final_reason = reason
 
         task.emit(
             "finish_signal",
             {
                 "tool": name,
                 "message": summary,
-                "reason": reason or "Agent called terminate tool.",
+                "reason": reason,
                 "status": status,
             },
         )

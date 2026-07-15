@@ -1,19 +1,79 @@
 import { Markdown } from '@/components/block/markdown';
-import { Badge } from '@/components/ui/badge';
 import type { AggregatedMessage, Message } from '@/libs/chat-messages/types';
 import { cn, formatNumber } from '@/libs/utils';
-import '@/styles/animations.css';
-import { ChevronDown, CircleCheck, CircleStop, LoaderIcon } from 'lucide-react';
+import {
+  AlertTriangle,
+  Check,
+  ChevronDown,
+  CircleStop,
+  Coins,
+  FileDiff,
+  LoaderCircle,
+  Wrench,
+} from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { StepBadge } from './step';
 import { ToolMessageContent } from './tools';
 
 interface ChatMessageProps {
   messages: AggregatedMessage[];
 }
 
+type LifecycleStep = AggregatedMessage & { type: 'agent:lifecycle:step' };
+
+type ToolCallSummary = {
+  id: string;
+  function: {
+    name: string;
+    arguments?: unknown;
+  };
+};
+
+const humanizeToolName = (name: string) => {
+  const labels: Record<string, string> = {
+    apply_patch_editor: 'Editing files',
+    ask_human: 'Waiting for input',
+    bash: 'Running a command',
+    browser_use: 'Using the browser',
+    codebase_overview: 'Mapping the codebase',
+    glob: 'Finding files',
+    grep: 'Searching the codebase',
+    line_edit: 'Editing a file',
+    memory_recall: 'Checking memory',
+    memory_save: 'Saving context',
+    planning: 'Updating the plan',
+    python_execute: 'Running Python',
+    read_files: 'Reading files',
+    skill_playbook: 'Loading guidance',
+    wait_for_user_input: 'Waiting for input',
+    web_search: 'Searching the web',
+  };
+  if (labels[name]) return labels[name];
+  return name
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, character => character.toUpperCase());
+};
+
+const getThinkMessage = (step: LifecycleStep) =>
+  step.messages.find(message => message.type === 'agent:lifecycle:step:think') as
+    | (AggregatedMessage & { type: 'agent:lifecycle:step:think' })
+    | undefined;
+
+const getToolSelection = (step: LifecycleStep) =>
+  getThinkMessage(step)?.messages.find(
+    (message): message is Message =>
+      'type' in message && message.type === 'agent:lifecycle:step:think:tool:selected',
+  );
+
+const getToolCalls = (step: LifecycleStep) => {
+  const calls = getToolSelection(step)?.content?.tool_calls;
+  return (Array.isArray(calls) ? calls : []) as ToolCallSummary[];
+};
+
+const getVisibleToolCalls = (step: LifecycleStep) =>
+  getToolCalls(step).filter(call => call.function?.name !== 'terminate');
+
 const UserMessage = ({ message }: { message: Message<{ request: string }> }) => (
-  <div className="ml-auto max-w-[78%] rounded-2xl bg-muted px-4 py-3">
+  <div className="ml-auto max-w-[min(82%,42rem)] rounded-2xl bg-muted px-4 py-3">
     <Markdown className="chat">{message.content.request}</Markdown>
   </div>
 );
@@ -22,6 +82,7 @@ interface CompletionMessageProps {
   message: Message<{
     results?: string[];
     message?: string;
+    status?: string;
     total_input_tokens?: number;
     total_completion_tokens?: number;
     reason?: string;
@@ -43,80 +104,57 @@ interface CompletionMessageProps {
       paths: string[];
     } | null;
   }>;
-  assistantText?: string;
 }
 
-const normalizeMessageText = (value: string) => value.trim().replace(/\s+/g, ' ');
-
-const CompletionMessage = ({ message, assistantText = '' }: CompletionMessageProps) => {
-  const showTokenCount = message.content.total_input_tokens || message.content.total_completion_tokens;
+const CompletionMessage = ({ message }: CompletionMessageProps) => {
+  const inputTokens = Number(message.content.total_input_tokens || 0);
+  const completionTokens = Number(message.content.total_completion_tokens || 0);
+  const showTokenCount = inputTokens > 0 || completionTokens > 0;
   const workspace = message.content.workspace;
   const pdfCount = workspace?.pdfs?.length || 0;
   const logCount = workspace?.logs?.length || 0;
   const planProgress = message.content.plan_progress || null;
   const changeSummary = message.content.change_summary || null;
-  const completionText = message.content.message || '';
-  const showCompletionText =
-    completionText &&
-    completionText !== 'Task completed' &&
-    normalizeMessageText(completionText) !== normalizeMessageText(assistantText);
+
   return (
-    <div className="inline-flex max-w-full flex-col gap-2">
-      <Badge className="w-fit font-mono" variant="outline">
-        <CircleCheck className="h-3.5 w-3.5 text-emerald-500" />
-        Completed{' '}
+    <div className="space-y-2 pt-1">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+        <span className="inline-flex items-center gap-1.5">
+          <Check className="h-3.5 w-3.5 text-emerald-600" />
+          Completed
+        </span>
         {showTokenCount && (
-          <>
-            (
-            <span>
-              {formatNumber(message.content.total_input_tokens || 0, { autoUnit: true })} input;{' '}
-              {formatNumber(message.content.total_completion_tokens || 0, { autoUnit: true })} completion
-            </span>
-            )
-          </>
+          <span className="inline-flex items-center gap-1.5 font-mono">
+            <Coins className="h-3.5 w-3.5" />
+            {formatNumber(inputTokens + completionTokens, { autoUnit: true })} tokens
+          </span>
         )}
-      </Badge>
-      {showCompletionText && <Markdown className="chat">{completionText}</Markdown>}
-      {message.content.reason && <div className="text-muted-foreground text-xs">Reason: {message.content.reason}</div>}
+        {changeSummary && changeSummary.files > 0 && (
+          <span className="inline-flex items-center gap-1.5">
+            <FileDiff className="h-3.5 w-3.5" />
+            {changeSummary.files} file{changeSummary.files === 1 ? '' : 's'} changed
+            <span className="font-mono text-emerald-600">+{changeSummary.added}</span>
+            <span className="font-mono text-rose-600">-{changeSummary.deleted}</span>
+          </span>
+        )}
+      </div>
+
       {workspace?.warning && (
-        <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+        <div className="border-l-2 border-amber-500 px-3 py-1 text-sm text-amber-800 dark:text-amber-300">
           {workspace.warning}
           {logCount > 0 && <span className="ml-1">Found {logCount} log file{logCount === 1 ? '' : 's'}.</span>}
         </div>
       )}
-      {planProgress && planProgress.total > 0 && (
-        <div className="rounded-md border border-sky-300 bg-sky-50 px-3 py-2 text-sm text-sky-900">
-          Plan progress: {planProgress.completed}/{planProgress.total} completed.
-          {planProgress.remaining.length > 0 && (
-            <div className="mt-1 text-xs">
-              Remaining: {planProgress.remaining.slice(0, 4).join(' • ')}
-              {planProgress.remaining.length > 4 ? ` • +${planProgress.remaining.length - 4} more` : ''}
-            </div>
-          )}
-        </div>
-      )}
-      {changeSummary && changeSummary.files > 0 && (
-        <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
-          <div className="font-medium">
-            {changeSummary.files} file{changeSummary.files === 1 ? '' : 's'} changed
-            <span className="ml-2 font-mono text-emerald-600">+{changeSummary.added}</span>
-            <span className="ml-1 font-mono text-rose-600">-{changeSummary.deleted}</span>
-          </div>
-          <div className="mt-1 space-y-1">
-            {changeSummary.paths.slice(0, 6).map(path => (
-              <div key={path} className="font-mono text-xs text-muted-foreground">
-                {path}
-              </div>
-            ))}
-            {changeSummary.paths.length > 6 ? (
-              <div className="text-xs text-muted-foreground">+{changeSummary.paths.length - 6} more files</div>
-            ) : null}
-          </div>
+      {planProgress && planProgress.total > 0 && planProgress.remaining.length > 0 && (
+        <div className="border-l-2 border-amber-500 px-3 py-1 text-sm">
+          Completed {planProgress.completed} of {planProgress.total} planned items. Remaining:{' '}
+          {planProgress.remaining.slice(0, 4).join(' · ')}
+          {planProgress.remaining.length > 4 ? ` · +${planProgress.remaining.length - 4} more` : ''}
         </div>
       )}
       {pdfCount > 0 && (
-        <div className="text-muted-foreground text-xs">
-          PDF output: {workspace?.pdfs?.slice(0, 3).join(', ')}
+        <div className="text-xs text-muted-foreground">
+          Output: {workspace?.pdfs?.slice(0, 3).join(', ')}
           {pdfCount > 3 ? ` and ${pdfCount - 3} more` : ''}
         </div>
       )}
@@ -128,6 +166,7 @@ interface TerminatedMessageProps {
   message: Message<{
     total_input_tokens?: number;
     total_completion_tokens?: number;
+    status?: string;
     reason?: string;
     message?: string;
     detail?: string;
@@ -140,71 +179,70 @@ interface TerminatedMessageProps {
 }
 
 const TerminatedMessage = ({ message }: TerminatedMessageProps) => {
-  const showTokenCount = message.content.total_input_tokens || message.content.total_completion_tokens;
   const planProgress = message.content.plan_progress || null;
+  const reason = message.content.reason || message.content.detail;
   return (
-    <div className="inline-flex max-w-full flex-col gap-2">
-      <Badge className="font-mono" variant="outline">
-        <CircleStop className="h-3.5 w-3.5 text-amber-500" />
-        Terminated{' '}
-        {showTokenCount && (
-          <>
-            (
-            <span>
-              {formatNumber(message.content.total_input_tokens || 0, { autoUnit: true })} input;{' '}
-              {formatNumber(message.content.total_completion_tokens || 0, { autoUnit: true })} completion
-            </span>
-            )
-          </>
-        )}
-      </Badge>
-      {(message.content.reason || message.content.detail || message.content.message) && (
-        <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-          {message.content.reason || message.content.detail || message.content.message}
-        </div>
-      )}
+    <div className="space-y-2 pt-1">
+      <div className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-300">
+        <CircleStop className="h-3.5 w-3.5" />
+        Stopped before completion
+      </div>
+      {reason && <div className="border-l-2 border-amber-500 px-3 py-1 text-sm">{reason}</div>}
       {planProgress && planProgress.total > 0 && (
-        <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-          Plan progress: {planProgress.completed}/{planProgress.total} completed.
-          {planProgress.remaining.length > 0 ? ` Remaining: ${planProgress.remaining.slice(0, 4).join(' • ')}` : ''}
+        <div className="text-xs text-muted-foreground">
+          Plan progress: {planProgress.completed}/{planProgress.total}
+          {planProgress.remaining.length > 0 ? ` · ${planProgress.remaining.slice(0, 4).join(' · ')}` : ''}
         </div>
       )}
     </div>
   );
 };
 
-const StepMessage = ({ message }: { message: AggregatedMessage & { type: 'agent:lifecycle:step' } }) => {
-  if (!('messages' in message)) return null;
-
-  const thinkMessage = message.messages.find(msg => msg.type === 'agent:lifecycle:step:think') as
-    | (AggregatedMessage & { type: 'agent:lifecycle:step:think' })
-    | undefined;
-
-  const toolSelectedMessage = thinkMessage?.messages.find(
-    (msg): msg is Message => 'type' in msg && msg.type === 'agent:lifecycle:step:think:tool:selected',
-  ) as (AggregatedMessage & { type: 'agent:lifecycle:step:think:tool:selected' }) | undefined;
-
-  const stepStartMessage = message.messages.find(msg => msg.type === 'agent:lifecycle:step:start') as Message | undefined;
-  const stepCompleteMessage = message.messages.find(msg => msg.type === 'agent:lifecycle:step:complete') as Message | undefined;
-  const stepErrorMessage = message.messages.find(msg => msg.type === 'agent:lifecycle:step:error') as Message | undefined;
-  const stepCount = stepStartMessage?.content?.step || message.step || 0;
-  const isRunning = !stepCompleteMessage && !stepErrorMessage;
+const StepMessage = ({ message }: { message: LifecycleStep }) => {
+  const selection = getToolSelection(message);
+  const toolCalls = getVisibleToolCalls(message);
+  const stepStart = message.messages.find(item => item.type === 'agent:lifecycle:step:start') as Message | undefined;
+  const stepComplete = message.messages.find(item => item.type === 'agent:lifecycle:step:complete') as Message | undefined;
+  const stepError = message.messages.find(item => item.type === 'agent:lifecycle:step:error') as Message | undefined;
+  const stepCount = Number(stepStart?.content?.step || message.step || 0);
+  const isRunning = !stepComplete && !stepError;
+  const headline = toolCalls.length
+    ? toolCalls.length === 1
+      ? humanizeToolName(toolCalls[0].function.name)
+      : `${toolCalls.length} actions`
+    : isRunning
+      ? 'Analyzing the request'
+      : 'Reasoning complete';
+  const modelNote = String(selection?.content?.content || '').trim();
 
   return (
-    <details className="group rounded-md border bg-background/80" open={isRunning}>
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm">
-        <div className="flex min-w-0 items-center gap-2">
-          {isRunning ? <LoaderIcon className="h-3.5 w-3.5 animate-spin text-primary" /> : <CircleCheck className="h-3.5 w-3.5 text-muted-foreground" />}
-          <span className="shrink-0 font-medium">Step {stepCount || ''}</span>
-          <span className="text-muted-foreground truncate">{toolSelectedMessage?.content.content || toolSelectedMessage?.content.tool || 'Thinking'}</span>
-        </div>
+    <details className="group border-b border-border/70 last:border-b-0" open={isRunning}>
+      <summary className="flex cursor-pointer list-none items-center gap-3 py-2.5 text-sm">
+        <span className="flex h-5 w-5 shrink-0 items-center justify-center text-muted-foreground">
+          {stepError ? (
+            <AlertTriangle className="h-4 w-4 text-rose-500" />
+          ) : isRunning ? (
+            <LoaderCircle className="h-4 w-4 animate-spin" />
+          ) : (
+            <Check className="h-4 w-4" />
+          )}
+        </span>
+        <span className="min-w-0 flex-1 truncate">
+          <span className="font-medium">{headline}</span>
+          {stepCount > 0 && <span className="ml-2 text-xs text-muted-foreground">Step {stepCount}</span>}
+        </span>
         <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
       </summary>
-      <div className="space-y-3 border-t px-3 py-3">
-        <StepBadge message={message} />
-        {toolSelectedMessage?.content.content && <Markdown className="chat text-sm">{toolSelectedMessage.content.content}</Markdown>}
+      <div className="space-y-3 pb-3 pl-8">
+        {modelNote && toolCalls.length > 0 && (
+          <div className="text-sm leading-6 text-muted-foreground">{modelNote}</div>
+        )}
         <ToolMessageContent message={message} />
-        {stepErrorMessage?.content?.message && <div className="rounded-md border border-destructive/30 bg-destructive/10 p-2 text-sm">{stepErrorMessage.content.message}</div>}
+        {stepError?.content?.message && (
+          <div className="border-l-2 border-rose-500 px-3 py-1 text-sm text-rose-700 dark:text-rose-300">
+            {stepError.content.message}
+          </div>
+        )}
       </div>
     </details>
   );
@@ -212,11 +250,25 @@ const StepMessage = ({ message }: { message: AggregatedMessage & { type: 'agent:
 
 const LifecycleMessage = ({ message }: { message: AggregatedMessage }) => {
   if (!('messages' in message)) return null;
-  const startMessage = message.messages.find(msg => msg.type === 'agent:lifecycle:start') as Message<{ request: string }> | undefined;
-  const completeMessage = message.messages.find(msg => msg.type === 'agent:lifecycle:complete') as CompletionMessageProps['message'] | undefined;
-  const terminatedMessage = message.messages.find(msg => msg.type === 'agent:lifecycle:terminated') as TerminatedMessageProps['message'] | undefined;
+  const startMessage = message.messages.find(item => item.type === 'agent:lifecycle:start') as
+    | Message<{ request: string }>
+    | undefined;
+  const completeMessage = message.messages.find(item => item.type === 'agent:lifecycle:complete') as
+    | CompletionMessageProps['message']
+    | undefined;
+  const terminatedMessage = message.messages.find(item => item.type === 'agent:lifecycle:terminated') as
+    | TerminatedMessageProps['message']
+    | undefined;
+  const structuredFinish = [...message.messages]
+    .reverse()
+    .find(
+      item =>
+        item.type === 'agent:lifecycle:state:change' &&
+        typeof item.content?.final_response === 'string' &&
+        item.content.final_response.trim(),
+    ) as Message | undefined;
   const stepMessages = message.messages.filter(
-    (msg): msg is AggregatedMessage & { type: 'agent:lifecycle:step' } => msg.type === 'agent:lifecycle:step',
+    (item): item is LifecycleStep => item.type === 'agent:lifecycle:step',
   );
   const latestTokenCount = getLatestTokenCount(stepMessages);
   const planProgress = getLatestPlanProgress(stepMessages);
@@ -232,60 +284,92 @@ const LifecycleMessage = ({ message }: { message: AggregatedMessage }) => {
     terminatedMessage.content.total_input_tokens = latestTokenCount.total_input;
     terminatedMessage.content.total_completion_tokens = latestTokenCount.total_completion;
   }
-  if (terminatedMessage) {
-    terminatedMessage.content.plan_progress = planProgress;
-  }
+  if (terminatedMessage) terminatedMessage.content.plan_progress = planProgress;
+
   const isRunning = !completeMessage && !terminatedMessage;
-  const assistantText = getAssistantText(stepMessages);
+  const directResponse = getDirectResponse(stepMessages);
+  const completionText = String(completeMessage?.content?.message || '').trim();
+  const terminatedText = String(terminatedMessage?.content?.message || '').trim();
+  const structuredFinalText = String(structuredFinish?.content?.final_response || '').trim();
+  const finalText =
+    structuredFinalText ||
+    (completionText && !/^Task (completed|already completed)\.?$/i.test(completionText) ? completionText : '') ||
+    terminatedText ||
+    directResponse;
+  const traceSteps = stepMessages.filter((step, index) => {
+    const hasTools = getVisibleToolCalls(step).length > 0;
+    const hasError = step.messages.some(item => item.type === 'agent:lifecycle:step:error');
+    return hasTools || hasError || (isRunning && index === stepMessages.length - 1 && !directResponse);
+  });
+  const toolCount = traceSteps.reduce((count, step) => count + getVisibleToolCalls(step).length, 0);
+  const latestTools = traceSteps.length ? getVisibleToolCalls(traceSteps[traceSteps.length - 1]) : [];
+  const currentActivity = latestTools.length ? humanizeToolName(latestTools[latestTools.length - 1].function.name) : 'Analyzing the request';
+  const showActivity = traceSteps.length > 0;
 
   return (
     <div className="container mx-auto max-w-4xl space-y-3">
       {startMessage && <UserMessage message={startMessage} />}
-      <div className="space-y-3">
-        <div className="flex items-start gap-3">
-          <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md border bg-background text-xs font-semibold">M</div>
-          <div className="min-w-0 flex-1 space-y-3">
-            <div className="flex items-center gap-2">
-              <div className="font-semibold">Manus</div>
-              <Badge variant={isRunning ? 'default' : 'outline'} className="font-mono">
-                {isRunning ? 'Working' : terminatedMessage ? 'Stopped' : 'Done'}
-              </Badge>
-            </div>
-            {assistantText ? (
-              <Markdown className="chat">{assistantText}</Markdown>
-            ) : (
-              <div className={cn('text-sm text-muted-foreground', isRunning && 'flex items-center gap-2')}>
-                {isRunning && <LoaderIcon className="h-3.5 w-3.5 animate-spin" />}
-                {isRunning ? 'Working on it...' : 'Run finished.'}
-              </div>
+      <div className="flex items-start gap-3 pt-1">
+        <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md border bg-background text-xs font-semibold">
+          M
+        </div>
+        <div className="min-w-0 flex-1 space-y-3">
+          <div className="flex h-7 items-center gap-2">
+            <span className="text-sm font-semibold">Manus</span>
+            {isRunning && (
+              <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                Working
+              </span>
             )}
-            <details className="group rounded-lg border bg-muted/20" open={isRunning}>
-              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium">Thinking and actions</span>
-                  <span className="text-muted-foreground">{stepMessages.length} step{stepMessages.length === 1 ? '' : 's'}</span>
-                </div>
-                <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform group-open:rotate-180" />
+          </div>
+
+          {showActivity && (
+            <details className="group rounded-md border bg-muted/20" open={isRunning}>
+              <summary className="flex cursor-pointer list-none items-center gap-3 px-3 py-2.5 text-sm">
+                <Wrench className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1 truncate">
+                  <span className="font-medium">{isRunning ? currentActivity : 'Activity'}</span>
+                  <span className="ml-2 text-xs text-muted-foreground">
+                    {toolCount > 0
+                      ? `${toolCount} action${toolCount === 1 ? '' : 's'} across ${traceSteps.length} step${traceSteps.length === 1 ? '' : 's'}`
+                      : 'Preparing'}
+                  </span>
+                </span>
+                <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
               </summary>
-              <div className="space-y-2 border-t p-2">
-                {stepMessages.length ? stepMessages.map((step, index) => <StepMessage key={String(step.index || index)} message={step} />) : <div className="p-2 text-sm text-muted-foreground">No trace yet.</div>}
+              <div className="border-t px-3">
+                {traceSteps.map((step, index) => (
+                  <StepMessage key={String(step.index || index)} message={step} />
+                ))}
               </div>
             </details>
-            {completeMessage && <CompletionMessage message={completeMessage} assistantText={assistantText} />}
-            {terminatedMessage && <TerminatedMessage message={terminatedMessage} />}
-          </div>
+          )}
+
+          {finalText ? (
+            <Markdown className="chat">{finalText}</Markdown>
+          ) : isRunning && !showActivity ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <LoaderCircle className="h-4 w-4 animate-spin" />
+              Analyzing the request
+            </div>
+          ) : null}
+
+          {completeMessage && <CompletionMessage message={completeMessage} />}
+          {terminatedMessage && <TerminatedMessage message={terminatedMessage} />}
         </div>
       </div>
     </div>
   );
 };
 
-const getLatestTokenCount = (steps: (AggregatedMessage & { type: 'agent:lifecycle:step' })[]) => {
+const getLatestTokenCount = (steps: LifecycleStep[]) => {
   for (const step of [...steps].reverse()) {
-    const thinkMessage = step.messages.find(msg => msg.type === 'agent:lifecycle:step:think') as
-      | (AggregatedMessage & { type: 'agent:lifecycle:step:think' })
-      | undefined;
-    const tokenMessages = thinkMessage?.messages.filter((msg): msg is Message => 'type' in msg && msg.type === 'agent:lifecycle:step:think:token:count') || [];
+    const tokenMessages =
+      getThinkMessage(step)?.messages.filter(
+        (message): message is Message =>
+          'type' in message && message.type === 'agent:lifecycle:step:think:token:count',
+      ) || [];
     const token = tokenMessages[tokenMessages.length - 1];
     if (token?.content) {
       return {
@@ -297,77 +381,70 @@ const getLatestTokenCount = (steps: (AggregatedMessage & { type: 'agent:lifecycl
   return null;
 };
 
-const getChangeSummary = (steps: (AggregatedMessage & { type: 'agent:lifecycle:step' })[]) => {
+const getChangeSummary = (steps: LifecycleStep[]) => {
   const map = new Map<string, { added: number; deleted: number }>();
   for (const step of steps) {
-    const actMessage = step.messages.find(msg => msg.type === 'agent:lifecycle:step:act') as
+    const actMessage = step.messages.find(item => item.type === 'agent:lifecycle:step:act') as
       | (AggregatedMessage & { type: 'agent:lifecycle:step:act' })
       | undefined;
-    const toolMessages = (actMessage?.messages.filter(msg => msg.type === 'agent:lifecycle:step:act:tool') || []) as (AggregatedMessage & {
-      type: 'agent:lifecycle:step:act:tool';
-    })[];
+    const toolMessages = (actMessage?.messages.filter(item => item.type === 'agent:lifecycle:step:act:tool') || []) as (
+      | AggregatedMessage
+    )[];
     for (const tool of toolMessages) {
-      const updates = tool.messages.filter(msg => msg.type === 'agent:lifecycle:step:act:tool:file:updated');
+      if (!('messages' in tool)) continue;
+      const updates = tool.messages.filter(item => item.type === 'agent:lifecycle:step:act:tool:file:updated');
       for (const update of updates) {
         const path = String(update.content?.path || '').trim();
         if (!path) continue;
-        const prev = map.get(path) || { added: 0, deleted: 0 };
-        prev.added += Number(update.content?.added_lines || 0);
-        prev.deleted += Number(update.content?.deleted_lines || 0);
-        map.set(path, prev);
+        const previous = map.get(path) || { added: 0, deleted: 0 };
+        previous.added += Number(update.content?.added_lines || 0);
+        previous.deleted += Number(update.content?.deleted_lines || 0);
+        map.set(path, previous);
       }
     }
   }
   const paths = Array.from(map.keys());
   const totals = Array.from(map.values()).reduce(
-    (acc, cur) => ({ added: acc.added + cur.added, deleted: acc.deleted + cur.deleted }),
+    (accumulator, current) => ({
+      added: accumulator.added + current.added,
+      deleted: accumulator.deleted + current.deleted,
+    }),
     { added: 0, deleted: 0 },
   );
-  return {
-    files: paths.length,
-    added: totals.added,
-    deleted: totals.deleted,
-    paths,
-  };
+  return { files: paths.length, added: totals.added, deleted: totals.deleted, paths };
 };
 
-const getAssistantText = (steps: (AggregatedMessage & { type: 'agent:lifecycle:step' })[]) => {
+const getDirectResponse = (steps: LifecycleStep[]) => {
   for (const step of [...steps].reverse()) {
-    const thinkMessage = step.messages.find(msg => msg.type === 'agent:lifecycle:step:think') as
-      | (AggregatedMessage & { type: 'agent:lifecycle:step:think' })
-      | undefined;
-    const selected = thinkMessage?.messages.find(
-      (msg): msg is Message => 'type' in msg && msg.type === 'agent:lifecycle:step:think:tool:selected',
-    );
-    const content = String(selected?.content?.content || '').trim();
-    if (content) return content;
+    const selection = getToolSelection(step);
+    const content = String(selection?.content?.content || '').trim();
+    if (content && getToolCalls(step).length === 0) return content;
   }
   return '';
 };
 
-const getLatestPlanProgress = (steps: (AggregatedMessage & { type: 'agent:lifecycle:step' })[]) => {
-  const progressRe = /Progress:\s*(\d+)\s*\/\s*(\d+)\s*steps completed/i;
-  const stepLineRe = /^\s*\d+\.\s*\[(.| )\]\s*(.+)$/gm;
+const getLatestPlanProgress = (steps: LifecycleStep[]) => {
+  const progressPattern = /Progress:\s*(\d+)\s*\/\s*(\d+)\s*steps completed/i;
+  const stepLinePattern = /^\s*\d+\.\s*\[(.| )\]\s*(.+)$/gm;
   for (const step of [...steps].reverse()) {
-    const actMessage = step.messages.find(msg => msg.type === 'agent:lifecycle:step:act') as
+    const actMessage = step.messages.find(item => item.type === 'agent:lifecycle:step:act') as
       | (AggregatedMessage & { type: 'agent:lifecycle:step:act' })
       | undefined;
-    const toolMessages = (actMessage?.messages || []) as AggregatedMessage[];
-    for (const tool of toolMessages) {
+    for (const tool of (actMessage?.messages || []) as AggregatedMessage[]) {
       if (!('messages' in tool)) continue;
-      const done = (tool.messages || []).find((m: any) => m.type === 'agent:lifecycle:step:act:tool:execute:complete') as Message | undefined;
+      const done = tool.messages.find(
+        item => item.type === 'agent:lifecycle:step:act:tool:execute:complete',
+      ) as Message | undefined;
       const resultText = String(done?.content?.result || '');
-      const progress = progressRe.exec(resultText);
+      const progress = progressPattern.exec(resultText);
       if (!progress) continue;
-      const completed = Number(progress[1] || 0);
-      const total = Number(progress[2] || 0);
       const remaining: string[] = [];
-      for (const match of resultText.matchAll(stepLineRe)) {
+      for (const match of resultText.matchAll(stepLinePattern)) {
         const mark = (match[1] || '').trim();
         const title = (match[2] || '').trim();
         if (mark !== '✓' && title) remaining.push(title);
       }
-      return { completed, total, remaining };
+      return { completed: Number(progress[1] || 0), total: Number(progress[2] || 0), remaining };
     }
   }
   return null;
@@ -377,8 +454,8 @@ const ChatMessage = ({ message }: { message: AggregatedMessage }) => {
   if (!message.type?.startsWith('agent:lifecycle')) {
     return (
       <div className={cn('container mx-auto flex max-w-4xl', message.role === 'user' ? 'justify-end' : 'justify-start')}>
-        <div className={cn('max-w-[78%]', message.role === 'user' && 'rounded-2xl bg-muted px-4 py-3')}>
-          <Markdown>{message.content}</Markdown>
+        <div className={cn('max-w-[min(82%,42rem)]', message.role === 'user' && 'rounded-2xl bg-muted px-4 py-3')}>
+          <Markdown className="chat">{String(message.content || '')}</Markdown>
         </div>
       </div>
     );
@@ -390,14 +467,14 @@ const ChatMessage = ({ message }: { message: AggregatedMessage }) => {
 export const ChatMessages = ({ messages = [] }: ChatMessageProps) => {
   const [showAll, setShowAll] = useState(false);
   const cappedMessages = useMemo(() => {
-    const HARD_CAP = 160;
-    if (showAll || messages.length <= HARD_CAP) return messages;
-    return messages.slice(messages.length - HARD_CAP);
+    const hardCap = 160;
+    if (showAll || messages.length <= hardCap) return messages;
+    return messages.slice(messages.length - hardCap);
   }, [messages, showAll]);
   const hiddenCount = Math.max(0, messages.length - cappedMessages.length);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       {hiddenCount > 0 && (
         <div className="container mx-auto max-w-4xl">
           <button

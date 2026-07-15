@@ -47,6 +47,22 @@ class BaseAgent(BaseModel, ABC):
     )
     current_step: int = Field(default=0, description="Current step in execution")
 
+    final_response: Optional[str] = Field(
+        default=None,
+        description="User-facing response produced when the current run finishes.",
+        exclude=True,
+    )
+    final_status: Optional[str] = Field(
+        default=None,
+        description="Structured outcome for the current run.",
+        exclude=True,
+    )
+    final_reason: Optional[str] = Field(
+        default=None,
+        description="Optional blocker or termination reason for the current run.",
+        exclude=True,
+    )
+
     duplicate_threshold: int = 2
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
@@ -129,6 +145,10 @@ class BaseAgent(BaseModel, ABC):
         if input is not None:
             self.update_memory("user", str(input))
 
+        self.final_response = None
+        self.final_status = None
+        self.final_reason = None
+
         results: List[str] = []
         try:
             async with self.state_context(AgentState.RUNNING):
@@ -169,6 +189,11 @@ class BaseAgent(BaseModel, ABC):
                         f"Terminated: Reached max steps ({self.max_steps})"
                     )
                     results.append(termination_msg)
+                    self.final_status = "stuck"
+                    self.final_reason = termination_msg
+                    self.final_response = (
+                        "I couldn't complete the task within the configured step limit."
+                    )
                     task.emit(
                         "terminated",
                         {
@@ -177,6 +202,8 @@ class BaseAgent(BaseModel, ABC):
                             "message": "Agent stopped because it reached the configured step limit.",
                         },
                     )
+            if self.final_response:
+                return self.final_response
             return "\n".join(results) if results else "No steps executed"
         finally:
             task.emit(

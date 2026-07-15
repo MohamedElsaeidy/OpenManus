@@ -13,9 +13,14 @@ export const LiveActivityPanel = ({ messages }: { messages: Message[] }) => {
       message => {
         const type = String(message.type || '');
         return (
-          Boolean(type) &&
-          type !== 'agent:lifecycle:step:act:tool:terminal:output' &&
-          type !== 'agent:plan:updated'
+          type === 'agent:lifecycle:step:start' ||
+          type === 'agent:lifecycle:step:complete' ||
+          type === 'agent:lifecycle:step:error' ||
+          type === 'agent:lifecycle:step:act:tool:execute:start' ||
+          type === 'agent:lifecycle:step:act:tool:execute:complete' ||
+          type === 'agent:lifecycle:step:act:tool:file:updated' ||
+          type === 'agent:lifecycle:complete' ||
+          type === 'agent:lifecycle:terminated'
         );
       },
     )
@@ -58,7 +63,6 @@ export const LiveActivityPanel = ({ messages }: { messages: Message[] }) => {
               {status}
             </Badge>
           </div>
-          <CardDescription>What the agent is doing right now.</CardDescription>
         </CardHeader>
         <CardContent className="grid min-h-0 flex-1 grid-rows-[1fr_auto] gap-3 overflow-hidden">
           <div className="min-h-0 overflow-auto rounded-md border">
@@ -66,17 +70,12 @@ export const LiveActivityPanel = ({ messages }: { messages: Message[] }) => {
               recent.map((message, index) => (
                 <div key={message.index || index} className="border-b p-2 last:border-b-0">
                   <div className="flex items-center justify-between gap-2">
-                    <div className="truncate text-xs font-medium">{String(message.type || 'event')}</div>
+                    <div className="truncate text-xs font-medium">{activityLabel(message)}</div>
                     <div className="text-muted-foreground text-[11px]">
                       {message.createdAt ? new Date(message.createdAt).toLocaleTimeString() : ''}
                     </div>
                   </div>
-                  {message.content?.name ? (
-                    <div className="text-muted-foreground mt-0.5 truncate font-mono text-[11px]">
-                      {String(message.content.name)}
-                    </div>
-                  ) : null}
-                  {message.content?.message ? (
+                  {(message.type === 'agent:lifecycle:step:error' || message.type === 'agent:lifecycle:terminated') && message.content?.message ? (
                     <div className="mt-1 text-xs">{String(message.content.message)}</div>
                   ) : null}
                 </div>
@@ -98,6 +97,30 @@ export const LiveActivityPanel = ({ messages }: { messages: Message[] }) => {
   );
 };
 
+const activityLabel = (message: Message) => {
+  const name = String(message.content?.name || '').replace(/[_-]+/g, ' ');
+  switch (message.type) {
+    case 'agent:lifecycle:step:start':
+      return `Step ${message.content?.step || ''} started`.trim();
+    case 'agent:lifecycle:step:complete':
+      return `Step ${message.content?.step || ''} completed`.trim();
+    case 'agent:lifecycle:step:error':
+      return 'Step failed';
+    case 'agent:lifecycle:step:act:tool:execute:start':
+      return name ? `Running ${name}` : 'Running tool';
+    case 'agent:lifecycle:step:act:tool:execute:complete':
+      return name ? `Finished ${name}` : 'Tool finished';
+    case 'agent:lifecycle:step:act:tool:file:updated':
+      return `Updated ${message.content?.path || 'file'}`;
+    case 'agent:lifecycle:complete':
+      return 'Run completed';
+    case 'agent:lifecycle:terminated':
+      return 'Run stopped';
+    default:
+      return 'Activity';
+  }
+};
+
 // ---------------------------------------------------------------------------
 // Live Plan Card — rendered inside LiveActivityPanel when planning tool is used
 // ---------------------------------------------------------------------------
@@ -115,9 +138,15 @@ const STATUS_COLOR: Record<string, string> = {
   blocked: 'text-rose-500',
 };
 
-const PlanCard = ({ plan }: { plan: Record<string, any> }) => {
-  const steps: Array<{ index: number; text: string; status: string; notes: string; active: boolean }> =
-    plan.steps ?? [];
+type PlanStep = { index: number; text: string; status: string; notes: string; active: boolean };
+type PlanProgress = { completed: number; total: number; pct: number };
+
+const PlanCard = ({
+  plan,
+}: {
+  plan: { title?: unknown; steps?: PlanStep[]; progress?: PlanProgress };
+}) => {
+  const steps = plan.steps ?? [];
   const progress = plan.progress ?? { completed: 0, total: steps.length, pct: 0 };
 
   return (

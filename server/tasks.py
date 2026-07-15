@@ -895,6 +895,7 @@ def run_task(task_id: str, prompt: Optional[str] = None):
     llm_connection = get_llm_connection()
     workspace_root = conversation_workspace(conversation_id)
     host_workspace_root = host_conversation_workspace(conversation_id)
+    agent_outcome = {"status": "success", "reason": ""}
 
     async def _run():
         workspace_root.mkdir(parents=True, exist_ok=True)
@@ -989,6 +990,8 @@ def run_task(task_id: str, prompt: Optional[str] = None):
                 disabled_tools=disabled_tools,
             )
             result = await agent.run(wrapped, run_prompt)
+            agent_outcome["status"] = agent.final_status or "success"
+            agent_outcome["reason"] = agent.final_reason or ""
             return result
         finally:
             try:
@@ -1021,10 +1024,40 @@ def run_task(task_id: str, prompt: Optional[str] = None):
         result = asyncio.run(
             asyncio.wait_for(_run(), timeout=max(30, TASK_HARD_TIMEOUT_SECONDS))
         )
-        task.status = "COMPLETED"
         workspace_summary = summarize_workspace(workspace_root)
         result_text = str(result or "").strip()
         completion_message = result_text if result_text else "Task completed."
+        outcome_status = str(agent_outcome.get("status") or "success")
+        if outcome_status != "success":
+            task.status = TaskStatus.FAILED
+            reason = str(agent_outcome.get("reason") or completion_message)
+            registry.update_task(
+                task,
+                result={
+                    "output": result,
+                    "error": reason,
+                    "workspace": workspace_summary,
+                    "conversation_id": conversation_id,
+                },
+            )
+            publish_event(
+                task_id,
+                "terminated",
+                {
+                    "message": completion_message,
+                    "reason": reason,
+                    "status": outcome_status,
+                    "workspace": workspace_summary,
+                    "conversation_id": conversation_id,
+                },
+            )
+            wrapped.emit(
+                "agent_state",
+                {"state": outcome_status, "conversation_id": conversation_id},
+            )
+            return {"status": "FAILED", "result": result, "reason": reason}
+
+        task.status = "COMPLETED"
         if config.agentmemory.enabled and config.agentmemory.auto_remember_completion:
             agentmemory.remember(
                 conversation_id=conversation_id,
@@ -1046,6 +1079,7 @@ def run_task(task_id: str, prompt: Optional[str] = None):
             "finish_signal",
             {
                 "message": completion_message,
+                "status": "success",
                 "workspace": workspace_summary,
                 "conversation_id": conversation_id,
             },

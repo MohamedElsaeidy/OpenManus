@@ -1,7 +1,7 @@
 """Integration tests for ToolCallAgent end-to-end loop with mock LLM responses.
 
-Tests the full ReAct step() cycle, phase transitions, nudge mechanisms,
-auto-termination after repeated no-tool turns, and tool retries.
+Tests the full ReAct step() cycle, phase transitions, direct responses,
+structured termination, and tool retries.
 """
 from unittest.mock import AsyncMock, patch
 
@@ -62,69 +62,22 @@ class TestAgentLoopIntegration:
             # Step 2: PLAN -> ACT -> OBSERVE -> DONE (due to terminate tool)
             await agent.step(task)
             assert agent.state == AgentState.FINISHED
+            assert agent.final_response == "All done!"
+            assert agent.final_status == "success"
 
     @pytest.mark.asyncio
-    async def test_text_only_nudge_then_terminate(self, agent, task):
-        """Test that a text-only response nudges the model instead of finishing."""
-        tc_term = ToolCall(
-            id="call_term",
-            function=Function(
-                name="terminate",
-                arguments='{"status": "success", "summary": "Finished after nudge"}',
-            ),
-        )
-
-        mock_ask = AsyncMock(
-            side_effect=[
-                MockLLMResponse(content="I am thinking about what to do next."),
-                MockLLMResponse(content="OK terminating now.", tool_calls=[tc_term]),
-            ]
-        )
+    async def test_text_only_response_finishes_directly(self, agent, task):
+        """A conversational response is a successful one-step terminal state."""
+        mock_ask = AsyncMock(return_value=MockLLMResponse(content="Hello there!"))
 
         with patch.object(agent.llm, "ask_tool", mock_ask), patch.object(
             agent.llm, "format_messages", return_value=[]
         ), patch.object(agent.llm, "count_message_tokens", return_value=100):
-            # Step 1: Model returns text only. Agent should nudge and NOT finish.
-            await agent.step(task)
-            assert agent.state != AgentState.FINISHED
-            assert agent._consecutive_no_tool_responses == 1
-            # Check that the nudge message was added to memory
-            last_msg = agent.memory.messages[-1]
-            assert last_msg.role == "user"
-            assert "You MUST either call a tool" in last_msg.content
-
-            # Step 2: Model calls terminate after receiving the nudge.
-            await agent.step(task)
+            result = await agent.step(task)
             assert agent.state == AgentState.FINISHED
-
-    @pytest.mark.asyncio
-    async def test_force_terminate_on_repeated_no_tool_responses(self, agent, task):
-        """Test hard cap (_MAX_NO_TOOL_RETRIES = 3) on consecutive text-only responses."""
-        mock_ask = AsyncMock(
-            side_effect=[
-                MockLLMResponse(content="Text response 1"),
-                MockLLMResponse(content="Text response 2"),
-                MockLLMResponse(content="Text response 3"),
-            ]
-        )
-
-        with patch.object(agent.llm, "ask_tool", mock_ask), patch.object(
-            agent.llm, "format_messages", return_value=[]
-        ), patch.object(agent.llm, "count_message_tokens", return_value=100):
-            # Turn 1
-            await agent.step(task)
-            assert agent._consecutive_no_tool_responses == 1
-            assert agent.state != AgentState.FINISHED
-
-            # Turn 2
-            await agent.step(task)
-            assert agent._consecutive_no_tool_responses == 2
-            assert agent.state != AgentState.FINISHED
-
-            # Turn 3: hits max retries (3) and force-terminates with failure
-            await agent.step(task)
-            assert agent._consecutive_no_tool_responses == 3
-            assert agent.state == AgentState.FINISHED
+            assert agent.final_response == "Hello there!"
+            assert agent.final_status == "success"
+            assert result == "Hello there!"
             assert agent.phase == AgentPhase.DONE
 
     @pytest.mark.asyncio

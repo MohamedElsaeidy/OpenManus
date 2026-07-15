@@ -128,8 +128,18 @@ body {
 }
 
 .markdown-body.chat {
-  @apply bg-muted;
-  font-size: 0.875rem;
+  background: transparent;
+  color: inherit;
+  font-size: 0.9375rem;
+  line-height: 1.7;
+
+  > :first-child {
+    margin-top: 0;
+  }
+
+  > :last-child {
+    margin-bottom: 0;
+  }
 
   pre,
   code {
