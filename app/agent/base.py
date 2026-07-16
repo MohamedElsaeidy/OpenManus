@@ -1,3 +1,5 @@
+import hashlib
+import json
 import math
 import time
 from abc import ABC, abstractmethod
@@ -77,7 +79,7 @@ class BaseAgent(BaseModel, ABC):
         exclude=True,
     )
 
-    duplicate_threshold: int = 2
+    duplicate_threshold: int = 3
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
 
@@ -379,10 +381,16 @@ class BaseAgent(BaseModel, ABC):
         """
 
     def handle_stuck_state(self, task: Task):
-        """Handle stuck state by adding a prompt to change strategy"""
-        stuck_prompt = "\
-        Observed duplicate responses. Consider new strategies and avoid repeating ineffective paths already attempted."
-        self.next_step_prompt = f"{stuck_prompt}\n{self.next_step_prompt}"
+        """Handle a repeated action without permanently growing the base prompt."""
+        self.update_memory(
+            "user",
+            (
+                "Progress check: the last action batch was repeated without changing "
+                "its tool arguments. Change strategy now: advance the range or cursor, "
+                "narrow the query, use a different tool, or act on the information "
+                "already collected. Do not repeat the identical action batch."
+            ),
+        )
         task.emit(
             "stuck_detected",
             {
@@ -392,56 +400,60 @@ class BaseAgent(BaseModel, ABC):
         )
 
     def is_stuck(self) -> bool:
-        """Detect stuck loops via two complementary signals.
+        """Detect only consecutive repeated actions or text responses.
 
-        1. Semantic tool-loop: the same tool is called with identical arguments
-           three or more times in the last 12 assistant messages — even if the
-           surrounding text is different each time.
-        2. Content-hash fallback: assistant content that hashes identically
-           (after whitespace normalization) appears `duplicate_threshold` times.
-           This catches trivial wording variation that exact string match misses.
+        Historical duplicates are not evidence that the current action is stuck.
+        Tool arguments are canonicalized so JSON key ordering does not affect the
+        comparison, and a changed cursor/range immediately counts as progress.
         """
-        import hashlib
-
-        messages = self.memory.messages
-        if len(messages) < 2:
+        assistant_messages = [
+            message
+            for message in self.memory.messages[-24:]
+            if message.role == "assistant"
+        ]
+        if len(assistant_messages) < self.duplicate_threshold:
             return False
 
-        # --- Signal 1: repeated tool-call signatures ---
-        recent_with_tools = [
-            m for m in messages[-12:] if getattr(m, "tool_calls", None)
-        ]
-        if len(recent_with_tools) >= self.duplicate_threshold:
-            call_signatures: list[str] = []
-            for msg in recent_with_tools:
-                for tc in msg.tool_calls or []:
-                    sig = f"{tc.function.name}:{tc.function.arguments}"
-                    call_signatures.append(sig)
-            from collections import Counter
+        latest = assistant_messages[-1]
+        if latest.tool_calls:
+            recent = assistant_messages[-self.duplicate_threshold :]
+            if any(not message.tool_calls for message in recent):
+                return False
 
-            counts = Counter(call_signatures)
-            if any(count >= self.duplicate_threshold for count in counts.values()):
-                return True
+            def _tool_batch_signature(message: Message) -> tuple[tuple[str, str], ...]:
+                signatures: list[tuple[str, str]] = []
+                for call in message.tool_calls or []:
+                    arguments = call.function.arguments or "{}"
+                    try:
+                        arguments = json.dumps(
+                            json.loads(arguments),
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            ensure_ascii=False,
+                        )
+                    except (json.JSONDecodeError, TypeError):
+                        arguments = " ".join(str(arguments).split())
+                    signatures.append((call.function.name, arguments))
+                return tuple(sorted(signatures))
 
-        # --- Signal 2: content-hash duplicate (improved from exact match) ---
-        last_message = messages[-1]
-        if not last_message.content:
+            latest_signature = _tool_batch_signature(latest)
+            return bool(latest_signature) and all(
+                _tool_batch_signature(message) == latest_signature
+                for message in recent
+            )
+
+        recent = assistant_messages[-self.duplicate_threshold :]
+        if any(message.tool_calls or not message.content for message in recent):
             return False
 
         def _content_hash(text: str) -> str:
-            """Normalize whitespace and hash for near-duplicate detection."""
             normalized = " ".join(text.split()).lower().strip()
-            return hashlib.md5(normalized.encode()).hexdigest()
+            return hashlib.sha256(normalized.encode()).hexdigest()
 
-        last_hash = _content_hash(last_message.content)
-        duplicate_count = sum(
-            1
-            for msg in reversed(messages[:-1])
-            if msg.role == "assistant"
-            and msg.content
-            and _content_hash(msg.content) == last_hash
+        latest_hash = _content_hash(latest.content)
+        return all(
+            _content_hash(message.content or "") == latest_hash for message in recent
         )
-        return duplicate_count >= self.duplicate_threshold
 
     @property
     def messages(self) -> List[Message]:

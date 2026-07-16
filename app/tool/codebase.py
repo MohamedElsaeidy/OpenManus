@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fnmatch
+import json
 import os
 import shutil
 import subprocess
@@ -226,7 +227,9 @@ class ReadFiles(BaseTool):
     parallel_safe: bool = True  # read-only, no shared state
     description: str = (
         "Read one or more files with line numbers. Prefer this for small batches of "
-        "related files after glob/grep has found them."
+        "related files after glob/grep has found them. Every file ends with a "
+        "READ_FILES_STATUS JSON record; when next_start_line is present, continue "
+        "from that line instead of rereading the same range."
     )
     parameters: dict = {
         "type": "object",
@@ -278,8 +281,11 @@ class ReadFiles(BaseTool):
                 error="At least one path is required via 'path' or 'paths'"
             )
 
-        limit = max(1000, min(max_chars_per_file or 12000, 50000))
+        requested_limit = max(1000, min(max_chars_per_file or 12000, 50000))
+        path_count = min(len(paths), 20)
+        limit = min(requested_limit, max(500, MAX_OUTPUT_CHARS // path_count - 300))
         sections: list[str] = []
+        read_statuses: list[dict] = []
         for raw_path in paths[:20]:
             file_path = _resolve_path(raw_path)
             if not file_path.exists():
@@ -297,14 +303,52 @@ class ReadFiles(BaseTool):
 
             start = max(1, start_line or 1)
             end = min(len(lines), end_line or len(lines))
-            numbered = [
-                f"{line_no:>5}\t{lines[line_no - 1]}"
-                for line_no in range(start, end + 1)
-            ]
-            content = "\n".join(numbered)
-            sections.append(f"== {file_path} ==\n{_truncate(content, limit)}")
+            rendered: list[str] = []
+            rendered_chars = 0
+            rendered_end = start - 1
+            if start <= end:
+                for line_no in range(start, end + 1):
+                    numbered_line = f"{line_no:>5}\t{lines[line_no - 1]}"
+                    separator_chars = 1 if rendered else 0
+                    if (
+                        rendered
+                        and rendered_chars + separator_chars + len(numbered_line)
+                        > limit
+                    ):
+                        break
+                    if not rendered and len(numbered_line) > limit:
+                        numbered_line = (
+                            numbered_line[: max(1, limit - 24)]
+                            + " <line content clipped>"
+                        )
+                    rendered.append(numbered_line)
+                    rendered_chars += separator_chars + len(numbered_line)
+                    rendered_end = line_no
 
-        return ToolResult(output=_truncate("\n\n".join(sections)))
+            has_more = rendered_end < len(lines)
+            status = {
+                "path": str(file_path),
+                "start_line": start,
+                "end_line": rendered_end if rendered else None,
+                "requested_end_line": end,
+                "total_lines": len(lines),
+                "response_clipped": rendered_end < end,
+                "next_start_line": rendered_end + 1 if has_more else None,
+            }
+            read_statuses.append(status)
+            status_line = "READ_FILES_STATUS " + json.dumps(
+                status, separators=(",", ":"), ensure_ascii=False
+            )
+            body = "\n".join(rendered)
+            if body:
+                sections.append(f"== {file_path} ==\n{body}\n{status_line}")
+            else:
+                sections.append(f"== {file_path} ==\n{status_line}")
+
+        metadata = {"reads": read_statuses}
+        if len(read_statuses) == 1:
+            metadata.update(read_statuses[0])
+        return ToolResult(output="\n\n".join(sections), metadata=metadata)
 
 
 class CodebaseOverview(BaseTool):

@@ -90,6 +90,71 @@ class TestIsStuck:
             agent.memory.add_message(msg)
         assert agent.is_stuck() is False
 
+    def test_changed_read_cursor_resets_historical_duplicates(self):
+        """Advancing a clipped read is progress even after three full-file reads."""
+        agent = self._make_agent()
+        for index in range(3):
+            call = ToolCall(
+                id=f"full-{index}",
+                function=Function(
+                    name="read_files",
+                    arguments='{"path":"/workspace/paper.tex"}',
+                ),
+            )
+            agent.memory.add_message(
+                Message.from_tool_calls(content="Reading", tool_calls=[call])
+            )
+
+        assert agent.is_stuck() is True
+
+        continued_call = ToolCall(
+            id="continued",
+            function=Function(
+                name="read_files",
+                arguments=(
+                    '{"path":"/workspace/paper.tex","start_line":125}'
+                ),
+            ),
+        )
+        agent.memory.add_message(
+            Message.from_tool_calls(content="Continuing", tool_calls=[continued_call])
+        )
+        assert agent.is_stuck() is False
+
+    def test_tool_arguments_are_compared_as_canonical_json(self):
+        """Equivalent JSON argument ordering still represents the same action."""
+        agent = self._make_agent()
+        arguments = [
+            '{"path":"/workspace/a","start_line":10}',
+            '{"start_line":10,"path":"/workspace/a"}',
+            '{ "path": "/workspace/a", "start_line": 10 }',
+        ]
+        for index, value in enumerate(arguments):
+            call = ToolCall(
+                id=str(index),
+                function=Function(name="read_files", arguments=value),
+            )
+            agent.memory.add_message(
+                Message.from_tool_calls(content="Reading", tool_calls=[call])
+            )
+
+        assert agent.is_stuck() is True
+
+    def test_old_nonconsecutive_duplicate_does_not_mark_latest_action_stuck(self):
+        agent = self._make_agent()
+        for index, command in enumerate(("ls", "pwd", "ls")):
+            call = ToolCall(
+                id=str(index),
+                function=Function(
+                    name="bash", arguments=f'{{"command":"{command}"}}'
+                ),
+            )
+            agent.memory.add_message(
+                Message.from_tool_calls(content="Checking", tool_calls=[call])
+            )
+
+        assert agent.is_stuck() is False
+
     def test_none_content_not_stuck(self):
         """Messages with None content should not crash stuck detection."""
         agent = self._make_agent()
