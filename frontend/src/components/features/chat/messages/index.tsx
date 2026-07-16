@@ -12,10 +12,13 @@ import {
   Wrench,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { ElapsedTime } from '../elapsed-time';
 import { ToolMessageContent } from './tools';
 
 interface ChatMessageProps {
   messages: AggregatedMessage[];
+  activeTaskId?: string;
+  isTaskRunning?: boolean;
 }
 
 type LifecycleStep = AggregatedMessage & { type: 'agent:lifecycle:step' };
@@ -104,9 +107,11 @@ interface CompletionMessageProps {
       paths: string[];
     } | null;
   }>;
+  startedAt?: Date;
+  finishedAt?: Date;
 }
 
-const CompletionMessage = ({ message }: CompletionMessageProps) => {
+const CompletionMessage = ({ message, startedAt, finishedAt }: CompletionMessageProps) => {
   const inputTokens = Number(message.content.total_input_tokens || 0);
   const completionTokens = Number(message.content.total_completion_tokens || 0);
   const showTokenCount = inputTokens > 0 || completionTokens > 0;
@@ -123,6 +128,9 @@ const CompletionMessage = ({ message }: CompletionMessageProps) => {
           <Check className="h-3.5 w-3.5 text-emerald-600" />
           Completed
         </span>
+        {startedAt && finishedAt && (
+          <ElapsedTime startedAt={startedAt} finishedAt={finishedAt} running={false} />
+        )}
         {showTokenCount && (
           <span className="inline-flex items-center gap-1.5 font-mono">
             <Coins className="h-3.5 w-3.5" />
@@ -176,9 +184,11 @@ interface TerminatedMessageProps {
       remaining: string[];
     } | null;
   }>;
+  startedAt?: Date;
+  finishedAt?: Date;
 }
 
-const TerminatedMessage = ({ message }: TerminatedMessageProps) => {
+const TerminatedMessage = ({ message, startedAt, finishedAt }: TerminatedMessageProps) => {
   const planProgress = message.content.plan_progress || null;
   const reason = message.content.reason || message.content.detail;
   return (
@@ -187,6 +197,14 @@ const TerminatedMessage = ({ message }: TerminatedMessageProps) => {
         <CircleStop className="h-3.5 w-3.5" />
         Stopped before completion
       </div>
+      {startedAt && finishedAt && (
+        <ElapsedTime
+          startedAt={startedAt}
+          finishedAt={finishedAt}
+          running={false}
+          finishedLabel="Stopped after"
+        />
+      )}
       {reason && <div className="border-l-2 border-amber-500 px-3 py-1 text-sm">{reason}</div>}
       {planProgress && planProgress.total > 0 && (
         <div className="text-xs text-muted-foreground">
@@ -248,10 +266,18 @@ const StepMessage = ({ message }: { message: LifecycleStep }) => {
   );
 };
 
-const LifecycleMessage = ({ message }: { message: AggregatedMessage }) => {
+const LifecycleMessage = ({
+  message,
+  activeTaskId,
+  isTaskRunning,
+}: {
+  message: AggregatedMessage;
+  activeTaskId?: string;
+  isTaskRunning?: boolean;
+}) => {
   if (!('messages' in message)) return null;
   const startMessage = message.messages.find(item => item.type === 'agent:lifecycle:start') as
-    | Message<{ request: string }>
+    | Message<{ request: string; task_id?: string }>
     | undefined;
   const completeMessage = message.messages.find(item => item.type === 'agent:lifecycle:complete') as
     | CompletionMessageProps['message']
@@ -286,7 +312,18 @@ const LifecycleMessage = ({ message }: { message: AggregatedMessage }) => {
   }
   if (terminatedMessage) terminatedMessage.content.plan_progress = planProgress;
 
-  const isRunning = !completeMessage && !terminatedMessage;
+  const lifecycleTaskId = String(
+    startMessage?.task_id || message.task_id || startMessage?.content?.task_id || message.content?.task_id || '',
+  );
+  const isRunning = Boolean(
+    !completeMessage &&
+      !terminatedMessage &&
+      isTaskRunning &&
+      activeTaskId &&
+      lifecycleTaskId === activeTaskId,
+  );
+  const startedAt = startMessage?.createdAt || message.createdAt;
+  const finishedAt = completeMessage?.createdAt || terminatedMessage?.createdAt;
   const directResponse = getDirectResponse(stepMessages);
   const completionText = String(completeMessage?.content?.message || '').trim();
   const terminatedText = String(terminatedMessage?.content?.message || '').trim();
@@ -316,12 +353,7 @@ const LifecycleMessage = ({ message }: { message: AggregatedMessage }) => {
         <div className="min-w-0 flex-1 space-y-3">
           <div className="flex h-7 items-center gap-2">
             <span className="text-sm font-semibold">Manus</span>
-            {isRunning && (
-              <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-                <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-                Working
-              </span>
-            )}
+            {isRunning && startedAt && <ElapsedTime startedAt={startedAt} running />}
           </div>
 
           {showActivity && (
@@ -355,8 +387,12 @@ const LifecycleMessage = ({ message }: { message: AggregatedMessage }) => {
             </div>
           ) : null}
 
-          {completeMessage && <CompletionMessage message={completeMessage} />}
-          {terminatedMessage && <TerminatedMessage message={terminatedMessage} />}
+          {completeMessage && (
+            <CompletionMessage message={completeMessage} startedAt={startedAt} finishedAt={finishedAt} />
+          )}
+          {terminatedMessage && (
+            <TerminatedMessage message={terminatedMessage} startedAt={startedAt} finishedAt={finishedAt} />
+          )}
         </div>
       </div>
     </div>
@@ -450,7 +486,15 @@ const getLatestPlanProgress = (steps: LifecycleStep[]) => {
   return null;
 };
 
-const ChatMessage = ({ message }: { message: AggregatedMessage }) => {
+const ChatMessage = ({
+  message,
+  activeTaskId,
+  isTaskRunning,
+}: {
+  message: AggregatedMessage;
+  activeTaskId?: string;
+  isTaskRunning?: boolean;
+}) => {
   if (!message.type?.startsWith('agent:lifecycle')) {
     return (
       <div className={cn('container mx-auto flex max-w-4xl', message.role === 'user' ? 'justify-end' : 'justify-start')}>
@@ -461,10 +505,20 @@ const ChatMessage = ({ message }: { message: AggregatedMessage }) => {
     );
   }
 
-  return <LifecycleMessage message={message} />;
+  return (
+    <LifecycleMessage
+      message={message}
+      activeTaskId={activeTaskId}
+      isTaskRunning={isTaskRunning}
+    />
+  );
 };
 
-export const ChatMessages = ({ messages = [] }: ChatMessageProps) => {
+export const ChatMessages = ({
+  messages = [],
+  activeTaskId,
+  isTaskRunning,
+}: ChatMessageProps) => {
   const [showAll, setShowAll] = useState(false);
   const cappedMessages = useMemo(() => {
     const hardCap = 160;
@@ -487,7 +541,11 @@ export const ChatMessages = ({ messages = [] }: ChatMessageProps) => {
       )}
       {cappedMessages.map((message, index) => (
         <div key={message.index || index} className="first:pt-0">
-          <ChatMessage message={message} />
+          <ChatMessage
+            message={message}
+            activeTaskId={activeTaskId}
+            isTaskRunning={isTaskRunning}
+          />
         </div>
       ))}
     </div>

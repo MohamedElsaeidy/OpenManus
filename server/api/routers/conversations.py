@@ -163,6 +163,7 @@ def _task_to_dict(orm: TaskORM) -> dict:
         "result": orm.result,
         "conversation_id": _conversation_id_for(orm),
         "created_at": orm.created_at.isoformat() if orm.created_at else None,
+        "updated_at": orm.updated_at.isoformat() if orm.updated_at else None,
         "request": (orm.input or {}).get("prompt", "Untitled task"),
     }
 

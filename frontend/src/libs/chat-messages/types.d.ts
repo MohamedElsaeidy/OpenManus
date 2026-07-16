@@ -71,6 +71,7 @@ type AggregatedMessageType =
  */
 export type Message<T = any> = {
   index?: number | string;
+  task_id?: string;
   role: 'user' | 'assistant';
   createdAt?: Date;
   type?: AgentLifecycleType;

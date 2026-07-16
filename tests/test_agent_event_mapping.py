@@ -63,3 +63,22 @@ def test_execution_slice_is_a_resumable_state_change():
     ]
     assert progress[0]["content"]["state"] == "continuing"
     assert progress[0]["content"]["next_slice"] == 2
+
+
+def test_browser_event_preserves_backend_and_extraction_metadata():
+    progress = _agent_event_to_progress(
+        {
+            "type": "browser_screenshot",
+            "data": {
+                "url": "https://example.test",
+                "browser_backend": "cloakbrowser",
+                "browser_fallback": False,
+                "extraction_method": "dom_text_fallback",
+                "extraction_fallback_reason": "model timeout after 120s",
+            },
+        }
+    )
+
+    assert progress[0]["name"] == ("agent:lifecycle:step:think:browser:browse:complete")
+    assert progress[0]["content"]["browser_backend"] == "cloakbrowser"
+    assert progress[0]["content"]["extraction_method"] == "dom_text_fallback"

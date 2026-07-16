@@ -1,13 +1,14 @@
 import asyncio
 import base64
 import json
-from typing import Generic, Optional, TypeVar
+import re
+from typing import Any, Generic, Optional, TypeVar
 
 from browser_use import Browser as BrowserUseBrowser
 from browser_use import BrowserConfig
 from browser_use.browser.context import BrowserContext, BrowserContextConfig
 from browser_use.dom.service import DomService
-from pydantic import Field, field_validator
+from pydantic import Field, PrivateAttr, field_validator
 from pydantic_core.core_schema import ValidationInfo
 
 from app.config import config
@@ -15,6 +16,14 @@ from app.llm import LLM
 from app.logger import logger
 from app.tool.base import BaseTool, ToolResult
 from app.tool.web_search import WebSearch
+
+
+BROWSER_STARTUP_TIMEOUT_SECONDS = 25
+NAVIGATION_TIMEOUT_SECONDS = 30
+DEFAULT_EXTRACTION_TIMEOUT_SECONDS = 120
+DEFAULT_EXTRACTION_CONTENT_LENGTH = 32000
+EXTRACTION_MAX_OUTPUT_TOKENS = 8192
+DOM_FALLBACK_CONTENT_LENGTH = 8000
 
 
 def _get_cloak_binary_path() -> Optional[str]:
@@ -100,6 +109,7 @@ class BrowserUseTool(BaseTool, Generic[Context]):
                     "get_dropdown_options",
                     "select_dropdown_option",
                     "go_back",
+                    "refresh",
                     "web_search",
                     "wait",
                     "extract_content",
@@ -160,6 +170,7 @@ class BrowserUseTool(BaseTool, Generic[Context]):
             "get_dropdown_options": ["index"],
             "select_dropdown_option": ["index", "text"],
             "go_back": [],
+            "refresh": [],
             "web_search": ["query"],
             "wait": ["seconds"],
             "extract_content": ["goal"],
@@ -171,7 +182,10 @@ class BrowserUseTool(BaseTool, Generic[Context]):
     context: Optional[BrowserContext] = Field(default=None, exclude=True)
     dom_service: Optional[DomService] = Field(default=None, exclude=True)
     web_search_tool: WebSearch = Field(default_factory=WebSearch, exclude=True)
-    _initialization_error: Optional[str] = None
+    _initialization_error: Optional[str] = PrivateAttr(default=None)
+    _backend: str = PrivateAttr(default="uninitialized")
+    _backend_executable: Optional[str] = PrivateAttr(default=None)
+    _fallback_reason: Optional[str] = PrivateAttr(default=None)
 
     # Context for generic functionality
     tool_context: Optional[Context] = Field(default=None, exclude=True)
@@ -184,24 +198,48 @@ class BrowserUseTool(BaseTool, Generic[Context]):
             raise ValueError("Parameters cannot be empty")
         return v
 
-    async def _ensure_browser_initialized(self) -> BrowserContext:
-        """Ensure browser and context are initialized.
+    def get_backend_info(self) -> dict[str, Any]:
+        """Return stable runtime metadata for browser lifecycle events."""
+        return {
+            "browser_backend": self._backend,
+            "browser_executable_path": self._backend_executable,
+            "browser_fallback": bool(self._fallback_reason),
+            "browser_fallback_reason": self._fallback_reason,
+        }
 
-        Prefers CloakBrowser's stealth Chromium binary (source-level fingerprint
-        patches, passes 30/30 bot detection tests) over stock Playwright Chromium.
-        Falls back to stock Playwright if CloakBrowser is unavailable.
-        """
+    async def _new_context(
+        self, browser: BrowserUseBrowser, context_config: BrowserContextConfig
+    ) -> BrowserContext:
+        return await asyncio.wait_for(
+            browser.new_context(context_config),
+            timeout=BROWSER_STARTUP_TIMEOUT_SECONDS,
+        )
+
+    async def _close_browser_instance(self) -> None:
+        if self.browser is not None:
+            try:
+                await self.browser.close()
+            except Exception as exc:
+                logger.debug(f"Browser cleanup after startup failure failed: {exc}")
+        self.browser = None
+        self.context = None
+        self.dom_service = None
+
+    async def _ensure_browser_initialized(self) -> BrowserContext:
+        """Initialize the configured browser and recover from Cloak startup failure."""
         if self._initialization_error:
             raise RuntimeError(self._initialization_error)
 
-        if self.browser is None:
-            browser_config_kwargs: dict = {"headless": True, "disable_security": True}
-            browser_class = BrowserUseBrowser
+        browser_config_kwargs: dict[str, Any] = {
+            "headless": True,
+            "disable_security": True,
+        }
+        browser_class = BrowserUseBrowser
 
+        if self.browser is None:
             if config.browser_config:
                 from browser_use.browser.browser import ProxySettings
 
-                # handle proxy settings.
                 if config.browser_config.proxy and config.browser_config.proxy.server:
                     browser_config_kwargs["proxy"] = ProxySettings(
                         server=config.browser_config.proxy.server,
@@ -224,20 +262,26 @@ class BrowserUseTool(BaseTool, Generic[Context]):
                         if not isinstance(value, list) or value:
                             browser_config_kwargs[attr] = value
 
-            # Inject CloakBrowser stealth binary unless the caller already
-            # specified a custom chrome_instance_path / wss_url / cdp_url.
-            if not any(
-                k in browser_config_kwargs
-                for k in ("chrome_instance_path", "wss_url", "cdp_url")
-            ):
+            if "wss_url" in browser_config_kwargs:
+                self._backend = "remote_websocket"
+            elif "cdp_url" in browser_config_kwargs:
+                self._backend = "remote_cdp"
+            elif "chrome_instance_path" in browser_config_kwargs:
+                self._backend = "custom_chromium"
+                self._backend_executable = browser_config_kwargs["chrome_instance_path"]
+            else:
                 cloak_path = _get_cloak_binary_path()
                 if cloak_path:
                     browser_class = ManagedCloakBrowser
                     browser_config_kwargs["chrome_instance_path"] = cloak_path
+                    self._backend = "cloakbrowser"
+                    self._backend_executable = cloak_path
                     logger.info(
-                        f"BrowserUseTool: using CloakBrowser stealth binary → {cloak_path}"
+                        "BrowserUseTool: using CloakBrowser stealth binary at "
+                        f"{cloak_path}"
                     )
                 else:
+                    self._backend = "playwright_chromium"
                     logger.info(
                         "BrowserUseTool: CloakBrowser not available, using stock Playwright Chromium"
                     )
@@ -246,8 +290,6 @@ class BrowserUseTool(BaseTool, Generic[Context]):
 
         if self.context is None:
             context_config = BrowserContextConfig()
-
-            # if there is context config in the config, use it.
             if (
                 config.browser_config
                 and hasattr(config.browser_config, "new_context_config")
@@ -256,25 +298,284 @@ class BrowserUseTool(BaseTool, Generic[Context]):
                 context_config = config.browser_config.new_context_config
 
             try:
-                self.context = await asyncio.wait_for(
-                    self.browser.new_context(context_config), timeout=25
-                )
+                self.context = await self._new_context(self.browser, context_config)
                 self.dom_service = DomService(await self.context.get_current_page())
             except Exception as exc:
-                self._initialization_error = (
-                    f"CloakBrowser initialization failed: {str(exc)}"
-                )
-                if self.browser is not None:
+                if self._backend == "cloakbrowser":
+                    self._fallback_reason = f"CloakBrowser startup failed: {exc}"
+                    logger.warning(
+                        f"{self._fallback_reason}; retrying with stock Playwright "
+                        "Chromium"
+                    )
+                    await self._close_browser_instance()
+                    fallback_kwargs = dict(browser_config_kwargs)
+                    fallback_kwargs.pop("chrome_instance_path", None)
+                    self._backend = "playwright_chromium"
+                    self._backend_executable = None
+                    self.browser = BrowserUseBrowser(BrowserConfig(**fallback_kwargs))
                     try:
-                        await self.browser.close()
-                    except Exception:
-                        pass
-                self.browser = None
-                self.context = None
-                self.dom_service = None
-                raise RuntimeError(self._initialization_error) from exc
+                        self.context = await self._new_context(
+                            self.browser, context_config
+                        )
+                        self.dom_service = DomService(
+                            await self.context.get_current_page()
+                        )
+                    except Exception as fallback_exc:
+                        await self._close_browser_instance()
+                        self._initialization_error = (
+                            "Browser initialization failed for CloakBrowser and stock "
+                            f"Playwright Chromium: {fallback_exc}"
+                        )
+                        raise RuntimeError(self._initialization_error) from fallback_exc
+                else:
+                    backend = self._backend.replace("_", " ")
+                    await self._close_browser_instance()
+                    self._initialization_error = (
+                        f"Browser initialization failed for {backend}: {exc}"
+                    )
+                    raise RuntimeError(self._initialization_error) from exc
 
         return self.context
+
+    @staticmethod
+    def _normalize_dom_text(content: str) -> str:
+        lines: list[str] = []
+        previous_blank = False
+        for raw_line in content.splitlines():
+            line = re.sub(r"[\t\x0b\x0c\r ]+", " ", raw_line).strip()
+            if not line:
+                if lines and not previous_blank:
+                    lines.append("")
+                previous_blank = True
+                continue
+            lines.append(line)
+            previous_blank = False
+        return "\n".join(lines).strip()
+
+    async def _read_page_content(self, page) -> str:
+        """Read rendered text first, then degrade to HTML-to-markdown."""
+        try:
+            content = self._normalize_dom_text(await page.inner_text("body"))
+        except Exception:
+            content = ""
+
+        if content:
+            return content
+
+        try:
+            import markdownify
+
+            return self._normalize_dom_text(
+                markdownify.markdownify(await page.content())
+            )
+        except Exception:
+            return ""
+
+    async def _navigate_page(self, page, url: str) -> Optional[int]:
+        response = await page.goto(
+            url,
+            wait_until="domcontentloaded",
+            timeout=NAVIGATION_TIMEOUT_SECONDS * 1000,
+        )
+        return response.status if response is not None else None
+
+    def _dom_fallback_result(
+        self,
+        *,
+        page,
+        content: str,
+        goal: str,
+        reason: str,
+    ) -> ToolResult:
+        limit = max(
+            DOM_FALLBACK_CONTENT_LENGTH,
+            int(
+                getattr(
+                    config.browser_config,
+                    "max_content_length",
+                    DEFAULT_EXTRACTION_CONTENT_LENGTH,
+                )
+            ),
+        )
+        excerpt = content[:limit].rstrip()
+        truncated = len(content) > len(excerpt)
+        suffix = "\n\n[DOM text truncated]" if truncated else ""
+        backend = self.get_backend_info()
+        return ToolResult(
+            output=(
+                "Extracted rendered DOM text "
+                f"(deterministic fallback: {reason}).\n"
+                f"Source: {page.url}\n"
+                f"Goal: {goal}\n\n{excerpt}{suffix}"
+            ),
+            metadata={
+                **backend,
+                "url": page.url,
+                "extraction_method": "dom_text_fallback",
+                "extraction_fallback_reason": reason,
+                "content_characters": len(content),
+                "returned_characters": len(excerpt),
+                "truncated": truncated,
+            },
+        )
+
+    async def _extract_page_content(
+        self, page, goal: str, max_content_length: int
+    ) -> ToolResult:
+        content = await self._read_page_content(page)
+        if not content:
+            return ToolResult(
+                error=(
+                    f"Page at {page.url} returned no readable content. The page may "
+                    "require authentication, be rate-limiting the browser, or still "
+                    "be rendering."
+                ),
+                metadata={**self.get_backend_info(), "url": page.url},
+            )
+
+        prompt = f"""Extract information from the rendered page for the stated goal.
+Return the result through the required extract_content tool. Preserve names,
+identifiers, links, and numerical details that support the answer.
+
+Goal: {goal}
+
+Rendered page text:
+{content[:max_content_length]}
+"""
+        extraction_function = {
+            "type": "function",
+            "function": {
+                "name": "extract_content",
+                "description": "Return information extracted from rendered page text",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "extracted_content": {
+                            "type": "object",
+                            "properties": {
+                                "text": {"type": "string"},
+                                "metadata": {"type": "object"},
+                            },
+                            "required": ["text"],
+                        }
+                    },
+                    "required": ["extracted_content"],
+                },
+            },
+        }
+
+        if self.llm is None:
+            return self._dom_fallback_result(
+                page=page,
+                content=content,
+                goal=goal,
+                reason="model unavailable",
+            )
+
+        extraction_timeout = max(
+            1,
+            int(
+                getattr(
+                    config.browser_config,
+                    "extraction_timeout_seconds",
+                    DEFAULT_EXTRACTION_TIMEOUT_SECONDS,
+                )
+            ),
+        )
+
+        try:
+            response = await asyncio.wait_for(
+                self.llm.ask_tool(
+                    [{"role": "user", "content": prompt}],
+                    system_msgs=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "You extract evidence from supplied web page text."
+                            ),
+                        }
+                    ],
+                    timeout=extraction_timeout,
+                    tools=[extraction_function],
+                    tool_choice="required",
+                    max_output_tokens=EXTRACTION_MAX_OUTPUT_TOKENS,
+                ),
+                timeout=extraction_timeout + 1,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Browser content extraction timed out; returning DOM text")
+            return self._dom_fallback_result(
+                page=page,
+                content=content,
+                goal=goal,
+                reason=f"model timeout after {extraction_timeout}s",
+            )
+        except Exception as exc:
+            logger.warning(
+                f"Browser content extraction failed; returning DOM text: {exc}"
+            )
+            return self._dom_fallback_result(
+                page=page,
+                content=content,
+                goal=goal,
+                reason=f"model error: {type(exc).__name__}",
+            )
+
+        if not response:
+            return self._dom_fallback_result(
+                page=page,
+                content=content,
+                goal=goal,
+                reason="model returned no response",
+            )
+
+        if not response.tool_calls:
+            direct_text = str(getattr(response, "content", "") or "").strip()
+            if direct_text:
+                return ToolResult(
+                    output=direct_text,
+                    metadata={
+                        **self.get_backend_info(),
+                        "url": page.url,
+                        "extraction_method": "model_direct_text",
+                        "content_characters": len(content),
+                    },
+                )
+            return self._dom_fallback_result(
+                page=page,
+                content=content,
+                goal=goal,
+                reason="model returned no tool call or direct text",
+            )
+
+        try:
+            tool_call = next(
+                call
+                for call in response.tool_calls
+                if call.function.name == "extract_content"
+            )
+            arguments = json.loads(tool_call.function.arguments or "{}")
+            extracted = arguments.get("extracted_content") or {}
+            extracted_text = str(extracted.get("text") or "").strip()
+            if not extracted_text:
+                raise ValueError("empty extracted_content.text")
+        except (StopIteration, TypeError, ValueError, json.JSONDecodeError) as exc:
+            return self._dom_fallback_result(
+                page=page,
+                content=content,
+                goal=goal,
+                reason=f"invalid model tool result: {exc}",
+            )
+
+        return ToolResult(
+            output=extracted_text,
+            metadata={
+                **self.get_backend_info(),
+                "url": page.url,
+                "extraction_method": "model",
+                "content_characters": len(content),
+            },
+        )
 
     async def execute(
         self,
@@ -315,7 +616,9 @@ class BrowserUseTool(BaseTool, Generic[Context]):
 
                 # Get max content length from config
                 max_content_length = getattr(
-                    config.browser_config, "max_content_length", 2000
+                    config.browser_config,
+                    "max_content_length",
+                    DOM_FALLBACK_CONTENT_LENGTH,
                 )
 
                 # Navigation actions
@@ -325,17 +628,31 @@ class BrowserUseTool(BaseTool, Generic[Context]):
                             error="URL is required for 'go_to_url' action"
                         )
                     page = await context.get_current_page()
-                    await page.goto(url)
-                    await page.wait_for_load_state()
-                    return ToolResult(output=f"Navigated to {url}")
+                    status = await self._navigate_page(page, url)
+                    return ToolResult(
+                        output=f"Navigated to {url}",
+                        metadata={
+                            **self.get_backend_info(),
+                            "url": page.url,
+                            "http_status": status,
+                        },
+                    )
 
                 elif action == "go_back":
                     await context.go_back()
-                    return ToolResult(output="Navigated back")
+                    page = await context.get_current_page()
+                    return ToolResult(
+                        output="Navigated back",
+                        metadata={**self.get_backend_info(), "url": page.url},
+                    )
 
                 elif action == "refresh":
                     await context.refresh_page()
-                    return ToolResult(output="Refreshed current page")
+                    page = await context.get_current_page()
+                    return ToolResult(
+                        output="Refreshed current page",
+                        metadata={**self.get_backend_info(), "url": page.url},
+                    )
 
                 elif action == "web_search":
                     if not query:
@@ -357,8 +674,7 @@ class BrowserUseTool(BaseTool, Generic[Context]):
                     url_to_navigate = first_search_result.url
 
                     page = await context.get_current_page()
-                    await page.goto(url_to_navigate)
-                    await page.wait_for_load_state()
+                    await self._navigate_page(page, url_to_navigate)
 
                     return search_response
 
@@ -474,90 +790,9 @@ class BrowserUseTool(BaseTool, Generic[Context]):
                         )
 
                     page = await context.get_current_page()
-
-                    # Prefer innerText — works on SPAs and JS-rendered pages.
-                    # Falls back to markdownify on the raw HTML for static pages.
-                    try:
-                        content = await page.inner_text("body")
-                        content = content.strip()
-                    except Exception:
-                        content = ""
-
-                    if not content:
-                        import markdownify
-
-                        content = markdownify.markdownify(await page.content()).strip()
-
-                    if not content:
-                        current_url = page.url
-                        return ToolResult(
-                            error=(
-                                f"Page at {current_url} returned no readable content. "
-                                "The page may require authentication, be rate-limiting the browser, "
-                                "or be a JavaScript SPA that has not yet rendered. "
-                                "Try: scroll down first, wait a few seconds, or navigate to a different URL."
-                            )
-                        )
-
-                    prompt = f"""\
-Your task is to extract the content of the page. You will be given a page and a goal, and you should extract all relevant information around this goal from the page. If the goal is vague, summarize the page. Respond in json format.
-Extraction goal: {goal}
-
-Page content:
-{content[:max_content_length]}
-"""
-                    messages = [{"role": "system", "content": prompt}]
-
-                    # Define extraction function schema
-                    extraction_function = {
-                        "type": "function",
-                        "function": {
-                            "name": "extract_content",
-                            "description": "Extract specific information from a webpage based on a goal",
-                            "parameters": {
-                                "type": "object",
-                                "properties": {
-                                    "extracted_content": {
-                                        "type": "object",
-                                        "description": "The content extracted from the page according to the goal",
-                                        "properties": {
-                                            "text": {
-                                                "type": "string",
-                                                "description": "Text content extracted from the page",
-                                            },
-                                            "metadata": {
-                                                "type": "object",
-                                                "description": "Additional metadata about the extracted content",
-                                                "properties": {
-                                                    "source": {
-                                                        "type": "string",
-                                                        "description": "Source of the extracted content",
-                                                    }
-                                                },
-                                            },
-                                        },
-                                    }
-                                },
-                                "required": ["extracted_content"],
-                            },
-                        },
-                    }
-
-                    # Use LLM to extract content with required function calling
-                    response = await self.llm.ask_tool(
-                        messages,
-                        tools=[extraction_function],
-                        tool_choice="required",
+                    return await self._extract_page_content(
+                        page, goal, max_content_length
                     )
-
-                    if response and response.tool_calls:
-                        args = json.loads(response.tool_calls[0].function.arguments)
-                        extracted_content = args.get("extracted_content", {})
-                        return ToolResult(
-                            output=f"Extracted from page:\n{extracted_content}\n"
-                        )
-
-                    return ToolResult(output="No content was extracted from the page.")
 
                 # Tab management actions
                 elif action == "switch_tab":
@@ -582,7 +817,8 @@ Page content:
 
                 # Utility actions
                 elif action == "wait":
-                    seconds_to_wait = seconds if seconds is not None else 3
+                    requested_wait = seconds if seconds is not None else 3
+                    seconds_to_wait = min(max(requested_wait, 0), 60)
                     await asyncio.sleep(seconds_to_wait)
                     return ToolResult(output=f"Waited for {seconds_to_wait} seconds")
 
@@ -590,7 +826,10 @@ Page content:
                     return ToolResult(error=f"Unknown action: {action}")
 
             except Exception as e:
-                return ToolResult(error=f"Browser action '{action}' failed: {str(e)}")
+                return ToolResult(
+                    error=f"Browser action '{action}' failed: {str(e)}",
+                    metadata=self.get_backend_info(),
+                )
 
     async def get_current_state(
         self, context: Optional[BrowserContext] = None
@@ -618,10 +857,17 @@ Page content:
             page = await ctx.get_current_page()
 
             await page.bring_to_front()
-            await page.wait_for_load_state()
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=5000)
+            except Exception as exc:
+                logger.debug(f"Browser state captured before load settled: {exc}")
 
             screenshot = await page.screenshot(
-                full_page=True, animations="disabled", type="jpeg", quality=100
+                full_page=False,
+                animations="disabled",
+                type="jpeg",
+                quality=75,
+                timeout=10000,
             )
 
             screenshot = base64.b64encode(screenshot).decode("utf-8")
@@ -645,11 +891,13 @@ Page content:
                     + viewport_height,
                 },
                 "viewport_height": viewport_height,
+                **self.get_backend_info(),
             }
 
             return ToolResult(
                 output=json.dumps(state_info, indent=4, ensure_ascii=False),
                 base64_image=screenshot,
+                metadata=self.get_backend_info(),
             )
         except Exception as e:
             return ToolResult(error=f"Failed to get browser state: {str(e)}")
@@ -664,16 +912,10 @@ Page content:
             if self.browser is not None:
                 await self.browser.close()
                 self.browser = None
-
-    def __del__(self):
-        """Ensure cleanup when object is destroyed."""
-        if self.browser is not None or self.context is not None:
-            try:
-                asyncio.run(self.cleanup())
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                loop.run_until_complete(self.cleanup())
-                loop.close()
+            self._initialization_error = None
+            self._backend = "uninitialized"
+            self._backend_executable = None
+            self._fallback_reason = None
 
     @classmethod
     def create_with_context(cls, context: Context) -> "BrowserUseTool[Context]":

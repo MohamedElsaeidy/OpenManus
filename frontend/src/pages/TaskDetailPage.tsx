@@ -14,7 +14,7 @@ import {
   type IntegrationsHealth,
 } from '@/services/conversations';
 import { createTask, getTask, getTaskEvents, sendTaskMessage, terminateTask } from '@/services/tasks';
-import { GaugeIcon, LoaderCircle, PanelRightClose, PanelRightOpen, Radio, Zap } from 'lucide-react';
+import { GaugeIcon, PanelRightClose, PanelRightOpen, Radio, Zap } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -58,12 +58,6 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
     return messages.slice(messages.length - historyWindow);
   }, [historyWindow, messages]);
   const aggregatedMessages = useMemo(() => aggregateMessages(visibleMessages), [visibleMessages]);
-  const lastFinishedAt = useMemo(() => {
-    const last = [...messages]
-      .reverse()
-      .find(m => m.type === 'agent:lifecycle:complete' || m.type === 'agent:lifecycle:terminated');
-    return last?.createdAt || null;
-  }, [messages]);
 
   useEffect(() => {
     shouldAutoScrollRef.current = shouldAutoScroll;
@@ -512,18 +506,6 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
       <div className="flex min-w-0 flex-1 flex-col border-r bg-background">
         <div className="flex h-12 items-center gap-2 border-b px-3 sm:px-5">
           <div className="shrink-0 font-semibold">OpenManus</div>
-          {isThinking ? (
-            <div className="hidden items-center gap-1.5 text-xs text-muted-foreground sm:flex">
-              <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-              Working
-            </div>
-          ) : lastFinishedAt ? (
-            <div className="hidden text-xs text-muted-foreground sm:block">
-              Idle · last completed {lastFinishedAt.toLocaleTimeString()}
-            </div>
-          ) : (
-            <div className="hidden text-xs text-muted-foreground sm:block">Idle</div>
-          )}
           {executionProgress && (
             <div className="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground">
               <span className="capitalize">{executionProgress.mode}</span>
@@ -597,7 +579,11 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
               }
             }}
           >
-            <ChatMessages messages={aggregatedMessages} />
+            <ChatMessages
+              messages={aggregatedMessages}
+              activeTaskId={activeTaskId}
+              isTaskRunning={isThinking && !isTaskCompleted}
+            />
           </div>
           <ChatInput
             status={isTerminating ? 'terminating' : isThinking ? 'thinking' : isTaskCompleted ? 'completed' : 'idle'}

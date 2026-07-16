@@ -11,6 +11,7 @@ export interface CreateTaskParams {
 export interface Task {
   id: string;
   created_at: string;
+  updated_at?: string | null;
   request: string;
   status?: string;
   result?: unknown;

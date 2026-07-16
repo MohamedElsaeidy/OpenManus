@@ -194,7 +194,10 @@ class BrowserSettings(BaseModel):
         None, description="Proxy settings for the browser"
     )
     max_content_length: int = Field(
-        2000, description="Maximum length for content retrieval operations"
+        32000, description="Maximum rendered text length sent to browser extraction"
+    )
+    extraction_timeout_seconds: int = Field(
+        120, description="Maximum browser extraction model time in seconds"
     )
 
 

@@ -214,6 +214,14 @@ async def task_events(request: Request, task_id: str):
                                 "id"
                             ] = f"{task_id}:{msg_id}:{progress_index}:{progress.get('name')}"
                             progress["task_id"] = task_id
+                            try:
+                                stream_timestamp_ms = int(str(msg_id).split("-", 1)[0])
+                                progress["created_at"] = datetime.fromtimestamp(
+                                    stream_timestamp_ms / 1000,
+                                    tz=timezone.utc,
+                                ).isoformat()
+                            except (TypeError, ValueError, OSError):
+                                progress["created_at"] = None
                             yield {"data": json.dumps(progress)}
                             if progress["name"] in (
                                 "agent:lifecycle:complete",
@@ -623,6 +631,8 @@ async def get_task(request: Request, task_id: str):
             "status": orm.status,
             "result": orm.result,
             "conversation_id": _conversation_id_for(orm),
+            "created_at": orm.created_at.isoformat() if orm.created_at else None,
+            "updated_at": orm.updated_at.isoformat() if orm.updated_at else None,
         }
 
 

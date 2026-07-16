@@ -624,7 +624,11 @@ class ToolCallAgent(ReActAgent):
                 current_tool_call.reset(token)
 
             if name == BrowserUseTool().name:
-                browser_screenshot = await self._emit_browser_screenshot(task)
+                browser_screenshot = await self._emit_browser_screenshot(
+                    task,
+                    result=result,
+                    arguments=run_args,
+                )
                 if browser_screenshot:
                     self._current_base64_image = browser_screenshot
 
@@ -781,16 +785,19 @@ class ToolCallAgent(ReActAgent):
         payload["deleted_lines"] = 0
         return payload
 
-    async def _emit_browser_screenshot(self, task: Task) -> Optional[str]:
+    async def _emit_browser_screenshot(
+        self,
+        task: Task,
+        *,
+        result: Any = None,
+        arguments: Optional[dict] = None,
+    ) -> Optional[str]:
         browser_tool = self.available_tools.get_tool(BrowserUseTool().name)
         if browser_tool is None or not hasattr(browser_tool, "get_current_state"):
             return None
 
         state_result = await browser_tool.get_current_state()
         screenshot = getattr(state_result, "base64_image", None)
-        if not screenshot:
-            return None
-
         url = ""
         title = ""
         try:
@@ -800,9 +807,24 @@ class ToolCallAgent(ReActAgent):
         except Exception:
             pass
 
+        backend_info = (
+            browser_tool.get_backend_info()
+            if hasattr(browser_tool, "get_backend_info")
+            else {}
+        )
+        result_metadata = getattr(result, "metadata", None) or {}
+
         task.emit(
             "browser_screenshot",
-            {"screenshot": screenshot, "url": url, "title": title},
+            {
+                "screenshot": screenshot,
+                "url": url or result_metadata.get("url", ""),
+                "title": title,
+                "action": (arguments or {}).get("action"),
+                **backend_info,
+                **result_metadata,
+                "state_error": getattr(state_result, "error", None),
+            },
         )
         return screenshot
 

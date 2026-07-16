@@ -270,9 +270,10 @@ async def _task_stream_progress(task: TaskORM) -> list[dict]:
                     **progress,
                     "id": f"{task.task_id}:{msg_id}:{progress_index}:{progress.get('name')}",
                     "task_id": str(task.task_id),
-                    "created_at": task.created_at.isoformat()
-                    if task.created_at
-                    else None,
+                    "created_at": datetime.fromtimestamp(
+                        int(str(msg_id).split("-", 1)[0]) / 1000,
+                        tz=timezone.utc,
+                    ).isoformat(),
                 }
             )
 
