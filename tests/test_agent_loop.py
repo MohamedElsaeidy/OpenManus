@@ -111,9 +111,7 @@ class TestIsStuck:
             id="continued",
             function=Function(
                 name="read_files",
-                arguments=(
-                    '{"path":"/workspace/paper.tex","start_line":125}'
-                ),
+                arguments=('{"path":"/workspace/paper.tex","start_line":125}'),
             ),
         )
         agent.memory.add_message(
@@ -145,9 +143,7 @@ class TestIsStuck:
         for index, command in enumerate(("ls", "pwd", "ls")):
             call = ToolCall(
                 id=str(index),
-                function=Function(
-                    name="bash", arguments=f'{{"command":"{command}"}}'
-                ),
+                function=Function(name="bash", arguments=f'{{"command":"{command}"}}'),
             )
             agent.memory.add_message(
                 Message.from_tool_calls(content="Checking", tool_calls=[call])

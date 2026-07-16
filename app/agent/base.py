@@ -438,8 +438,7 @@ class BaseAgent(BaseModel, ABC):
 
             latest_signature = _tool_batch_signature(latest)
             return bool(latest_signature) and all(
-                _tool_batch_signature(message) == latest_signature
-                for message in recent
+                _tool_batch_signature(message) == latest_signature for message in recent
             )
 
         recent = assistant_messages[-self.duplicate_threshold :]

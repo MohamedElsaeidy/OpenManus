@@ -14,11 +14,7 @@ def test_execution_profiles_scale_all_budget_dimensions():
         < deep.max_wall_time_seconds
     )
     assert fast.max_tool_calls < balanced.max_tool_calls < deep.max_tool_calls
-    assert (
-        fast.max_continuations
-        < balanced.max_continuations
-        < deep.max_continuations
-    )
+    assert fast.max_continuations < balanced.max_continuations < deep.max_continuations
 
 
 def test_unknown_execution_mode_falls_back_to_balanced():
