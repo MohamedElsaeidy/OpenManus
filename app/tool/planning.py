@@ -104,7 +104,11 @@ class PlanningTool(BaseTool):
         if command == "create":
             return self._create_plan(plan_id, title, steps)
         elif command == "update":
-            if step_index is not None or step_status is not None or step_notes is not None:
+            if (
+                step_index is not None
+                or step_status is not None
+                or step_notes is not None
+            ):
                 raise ToolError(
                     "command='update' cannot change step progress. Use "
                     "command='mark_step' with step_index and step_status."

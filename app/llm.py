@@ -1459,9 +1459,7 @@ class LLM:
                         "stream": False,
                     }
                     if model in REASONING_MODELS:
-                        fallback_params[
-                            "max_completion_tokens"
-                        ] = output_token_limit
+                        fallback_params["max_completion_tokens"] = output_token_limit
                     else:
                         fallback_params["max_tokens"] = output_token_limit
                         fallback_params["temperature"] = (
