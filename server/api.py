@@ -1916,6 +1916,10 @@ async def update_admin_settings(request: Request):
                     "api_type",
                     "max_tokens",
                     "temperature",
+                    "thinking_budget",
+                    "max_steps",
+                    "context_window",
+                    "calibration_mode",
                     "fallback_chain",
                 ]
                 if body["llm_connection"].get(key) not in (None, "")
@@ -1927,6 +1931,20 @@ async def update_admin_settings(request: Request):
                     status_code=400,
                     detail="llm_connection.fallback_chain must be a list of connection objects",
                 )
+            if "max_steps" in allowed:
+                try:
+                    max_steps = int(allowed["max_steps"])
+                except (TypeError, ValueError):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="llm_connection.max_steps must be an integer",
+                    )
+                if not 1 <= max_steps <= 200:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="llm_connection.max_steps must be between 1 and 200",
+                    )
+                allowed["max_steps"] = max_steps
             _set_app_setting(session, "llm_connection", allowed)
         if "tools" in body:
             disabled = [

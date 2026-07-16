@@ -443,6 +443,8 @@ export default function AdminPage() {
                 <Input
                   placeholder="30"
                   type="number"
+                  min="1"
+                  max="200"
                   value={settings.llm_connection.max_steps ?? ''}
                   onChange={event =>
                     setSettings({

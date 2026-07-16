@@ -164,6 +164,25 @@ class BaseAgent(BaseModel, ABC):
                         raise TaskInterrupted()
 
                     self.current_step += 1
+                    if self.current_step == max(1, self.max_steps - 4):
+                        remaining = self.max_steps - self.current_step + 1
+                        task.emit(
+                            "warning",
+                            {
+                                "message": (
+                                    f"{remaining} work steps remain. Prioritize creating "
+                                    "and verifying the requested deliverable."
+                                )
+                            },
+                        )
+                        self.update_memory(
+                            "user",
+                            (
+                                f"Execution budget notice: {remaining} work steps remain. "
+                                "Stop optional exploration. Create the requested deliverable, "
+                                "verify it, then finish with a concrete result."
+                            ),
+                        )
                     task.emit(
                         "step_start",
                         {"step": self.current_step, "max_steps": self.max_steps},
@@ -182,26 +201,34 @@ class BaseAgent(BaseModel, ABC):
                         {"step": self.current_step, "result": step_result},
                     )
 
-                if self.current_step >= self.max_steps:
-                    self.current_step = 0
-                    self.state = AgentState.IDLE
-                    termination_msg = (
-                        f"Terminated: Reached max steps ({self.max_steps})"
-                    )
-                    results.append(termination_msg)
-                    self.final_status = "stuck"
-                    self.final_reason = termination_msg
-                    self.final_response = (
-                        "I couldn't complete the task within the configured step limit."
-                    )
-                    task.emit(
-                        "terminated",
-                        {
-                            "reason": termination_msg,
-                            "status": "stuck",
-                            "message": "Agent stopped because it reached the configured step limit.",
-                        },
-                    )
+                if (
+                    self.current_step >= self.max_steps
+                    and self.state != AgentState.FINISHED
+                ):
+                    finalization_result = await self._finalize_after_step_limit(task)
+                    if self.state == AgentState.FINISHED:
+                        if finalization_result:
+                            results.append(str(finalization_result))
+                    else:
+                        self.current_step = 0
+                        self.state = AgentState.IDLE
+                        termination_msg = (
+                            f"Terminated: Reached max steps ({self.max_steps})"
+                        )
+                        results.append(termination_msg)
+                        self.final_status = "stuck"
+                        self.final_reason = termination_msg
+                        self.final_response = (
+                            "I couldn't complete the task within the configured step limit."
+                        )
+                        task.emit(
+                            "terminated",
+                            {
+                                "reason": termination_msg,
+                                "status": "stuck",
+                                "message": "Agent stopped because it reached the configured step limit.",
+                            },
+                        )
             if self.final_response:
                 return self.final_response
             return "\n".join(results) if results else "No steps executed"
@@ -216,6 +243,10 @@ class BaseAgent(BaseModel, ABC):
                 },
             )
             await SANDBOX_CLIENT.cleanup()
+
+    async def _finalize_after_step_limit(self, task: Task) -> Optional[str]:
+        """Give specialized agents a non-work pass to report their final state."""
+        return None
 
     @abstractmethod
     async def step(self, task: Task) -> str:

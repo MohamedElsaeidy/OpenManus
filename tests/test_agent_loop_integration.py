@@ -109,6 +109,66 @@ class TestAgentLoopIntegration:
         )
 
     @pytest.mark.asyncio
+    async def test_termination_on_last_work_step_is_preserved(self, agent, task):
+        terminate = ToolCall(
+            id="terminate_last",
+            function=Function(
+                name="terminate",
+                arguments='{"status":"success","summary":"Artifact verified"}',
+            ),
+        )
+        agent.max_steps = 1
+        mock_ask = AsyncMock(
+            return_value=MockLLMResponse(content="Done", tool_calls=[terminate])
+        )
+
+        with patch.object(agent.llm, "ask_tool", mock_ask), patch.object(
+            agent.llm, "format_messages", return_value=[]
+        ), patch.object(agent.llm, "count_message_tokens", return_value=100), patch(
+            "app.agent.base.SANDBOX_CLIENT.cleanup", new=AsyncMock()
+        ):
+            result = await agent.run(task, "create an artifact")
+
+        assert result == "Artifact verified"
+        assert agent.final_status == "success"
+        assert agent.final_reason == ""
+
+    @pytest.mark.asyncio
+    async def test_step_limit_gets_termination_only_finalization(self, agent, task):
+        work = ToolCall(
+            id="work_last",
+            function=Function(name="bash", arguments='{"command":"echo done"}'),
+        )
+        terminate = ToolCall(
+            id="terminate_finalize",
+            function=Function(
+                name="terminate",
+                arguments=(
+                    '{"status":"success","summary":"artifact.tex and artifact.pdf '
+                    'were created and verified"}'
+                ),
+            ),
+        )
+        agent.max_steps = 1
+        mock_ask = AsyncMock(
+            side_effect=[
+                MockLLMResponse(content="Verifying", tool_calls=[work]),
+                MockLLMResponse(content="Finalizing", tool_calls=[terminate]),
+            ]
+        )
+
+        with patch.object(agent.llm, "ask_tool", mock_ask), patch.object(
+            agent.llm, "format_messages", return_value=[]
+        ), patch.object(agent.llm, "count_message_tokens", return_value=100), patch(
+            "app.agent.base.SANDBOX_CLIENT.cleanup", new=AsyncMock()
+        ):
+            result = await agent.run(task, "create an artifact")
+
+        assert mock_ask.await_count == 2
+        assert result == "artifact.tex and artifact.pdf were created and verified"
+        assert agent.final_status == "success"
+
+    @pytest.mark.asyncio
     async def test_tool_retry_on_error(self, agent, task):
         """Test that execute_tool retries when a tool returns ToolResult.is_error."""
         from app.tool.base import ToolResult

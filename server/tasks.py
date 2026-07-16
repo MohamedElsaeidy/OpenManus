@@ -985,9 +985,28 @@ def run_task(task_id: str, prompt: Optional[str] = None):
             agent_workspace = (
                 config.sandbox.work_dir if sandbox is not None else str(workspace_root)
             )
+            try:
+                agent_max_steps = int(
+                    selected_connection.get("max_steps") or config.agent.max_steps
+                )
+            except (TypeError, ValueError):
+                agent_max_steps = config.agent.max_steps
+            agent_max_steps = max(1, min(agent_max_steps, 200))
+            wrapped.emit(
+                "agent_configuration",
+                {
+                    "max_steps": agent_max_steps,
+                    "max_steps_source": (
+                        "llm_connection"
+                        if selected_connection.get("max_steps") not in (None, "")
+                        else "config"
+                    ),
+                },
+            )
             agent = await Manus.create(
                 workspace_root=agent_workspace,
                 disabled_tools=disabled_tools,
+                max_steps=agent_max_steps,
             )
             result = await agent.run(wrapped, run_prompt)
             agent_outcome["status"] = agent.final_status or "success"

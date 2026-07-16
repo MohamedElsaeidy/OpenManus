@@ -857,6 +857,78 @@ class ToolCallAgent(ReActAgent):
         """Check if tool name is in special tools list."""
         return name.lower() in [n.lower() for n in self.special_tool_names]
 
+    async def _finalize_after_step_limit(self, task: Task) -> Optional[str]:
+        """Request one structured completion after the work-step budget is spent."""
+        task.emit(
+            "agent:lifecycle:finalization:start",
+            {
+                "step": self.current_step,
+                "max_steps": self.max_steps,
+                "agent": self.name,
+            },
+        )
+        final_prompt = Message.user_message(
+            "The work-step budget is exhausted. Do not perform more work. Review the "
+            "tool results already in memory and call terminate now. Use status=success "
+            "only if the requested deliverable was created and verified; otherwise use "
+            "status=failure with the exact blocker. Include artifact paths in the summary."
+        )
+        system_msgs = (
+            [Message.system_message(self.system_prompt)] if self.system_prompt else []
+        )
+        self._maybe_compress_context(task, system_msgs)
+        response = await self.llm.ask_tool(
+            messages=[*self.messages, final_prompt],
+            system_msgs=system_msgs,
+            tools=[Terminate().to_param()],
+            tool_choice=ToolChoice.REQUIRED,
+        )
+        content = str(response.content or "").strip() if response else ""
+        calls = response.tool_calls if response and response.tool_calls else []
+        terminate_call = next(
+            (call for call in calls if call.function.name == Terminate().name),
+            None,
+        )
+        if terminate_call is None:
+            self.final_response = content or (
+                "The work-step budget was exhausted before structured completion."
+            )
+            self.final_status = "failure"
+            self.final_reason = "Model did not issue terminate during finalization."
+            self.state = AgentState.FINISHED
+            task.emit(
+                "finish_signal",
+                {
+                    "message": self.final_response,
+                    "reason": self.final_reason,
+                    "status": "failure",
+                    "finalization": True,
+                },
+            )
+            return self.final_response
+
+        self._last_assistant_content = content
+        self.memory.add_message(
+            Message.from_tool_calls(content=content, tool_calls=[terminate_call])
+        )
+        observation = await self.execute_tool(terminate_call, task)
+        self.memory.add_message(
+            Message.tool_message(
+                content=observation,
+                tool_call_id=terminate_call.id,
+                name=terminate_call.function.name,
+            )
+        )
+        task.emit(
+            "agent:lifecycle:finalization:complete",
+            {
+                "step": self.current_step,
+                "agent": self.name,
+                "status": self.final_status or "failure",
+            },
+        )
+        return self.final_response or observation
+
     async def cleanup(self):
         """Clean up resources used by the agent's tools."""
         for tool_instance in self.available_tools.tool_map.values():
