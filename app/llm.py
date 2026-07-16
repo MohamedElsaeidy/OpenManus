@@ -33,9 +33,12 @@ from app.schema import (
     ToolChoice,
 )
 from app.task_context import (
+    add_current_token_usage,
     emit_current_task,
     get_current_llm_connection,
     get_current_model,
+    get_current_token_usage,
+    has_current_execution_usage,
 )
 
 
@@ -590,16 +593,24 @@ class LLM:
 
     def update_token_count(self, input_tokens: int, completion_tokens: int = 0) -> None:
         """Update token counts"""
-        # Only track tokens if max_input_tokens is set
         self.total_input_tokens += input_tokens
         self.total_completion_tokens += completion_tokens
+        task_usage = add_current_token_usage(input_tokens, completion_tokens)
+        has_task_usage = task_usage["total"] > 0
         emit_current_task(
             "token_count",
             {
                 "input": input_tokens,
                 "completion": completion_tokens,
-                "total_input": self.total_input_tokens,
-                "total_completion": self.total_completion_tokens,
+                "total_input": (
+                    task_usage["input"] if has_task_usage else self.total_input_tokens
+                ),
+                "total_completion": (
+                    task_usage["completion"]
+                    if has_task_usage
+                    else self.total_completion_tokens
+                ),
+                "task_total": task_usage["total"] if has_task_usage else None,
             },
         )
         logger.info(
@@ -611,7 +622,13 @@ class LLM:
     def check_token_limit(self, input_tokens: int) -> bool:
         """Check if token limits are exceeded"""
         if self.max_input_tokens is not None:
-            return (self.total_input_tokens + input_tokens) <= self.max_input_tokens
+            task_usage = get_current_token_usage()
+            used_input_tokens = (
+                task_usage["input"]
+                if has_current_execution_usage()
+                else self.total_input_tokens
+            )
+            return (used_input_tokens + input_tokens) <= self.max_input_tokens
         # If max_input_tokens is not set, always return True
         return True
 

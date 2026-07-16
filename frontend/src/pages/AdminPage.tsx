@@ -16,6 +16,7 @@ import {
   type CalibrationProfile,
   type CalibrationResult,
   type CalibrationStatus,
+  type ExecutionMode,
 } from '@/services/admin';
 import { listModels, queryModels, type ModelOption } from '@/services/models';
 import {
@@ -218,9 +219,12 @@ export default function AdminPage() {
       if (!Array.isArray(fallbackChain)) {
         throw new Error('Fallback chain must be a JSON array');
       }
+      const connection = { ...settings.llm_connection };
+      delete connection.max_steps;
       const saved = await updateAdminSettings({
         llm_connection: {
-          ...settings.llm_connection,
+          ...connection,
+          execution_mode: connection.execution_mode || 'balanced',
           fallback_chain: fallbackChain,
         },
         tools: settings.tools,
@@ -436,26 +440,33 @@ export default function AdminPage() {
                   }
                 />
               </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">
-                  Max Agent Steps
-                </Label>
-                <Input
-                  placeholder="30"
-                  type="number"
-                  min="1"
-                  max="200"
-                  value={settings.llm_connection.max_steps ?? ''}
-                  onChange={event =>
-                    setSettings({
-                      ...settings,
-                      llm_connection: {
-                        ...settings.llm_connection,
-                        max_steps: Number(event.target.value) || undefined,
-                      },
-                    })
-                  }
-                />
+              <div className="space-y-1.5 md:col-span-2">
+                <Label className="text-xs text-muted-foreground">Execution Mode</Label>
+                <div className="grid grid-cols-3 overflow-hidden rounded-md border">
+                  {(['fast', 'balanced', 'deep'] as ExecutionMode[]).map(mode => (
+                    <button
+                      key={mode}
+                      type="button"
+                      className={`h-9 border-r px-3 text-sm capitalize last:border-r-0 ${
+                        (settings.llm_connection.execution_mode || 'balanced') === mode
+                          ? 'bg-primary text-primary-foreground'
+                          : 'bg-background text-muted-foreground hover:bg-muted'
+                      }`}
+                      onClick={() =>
+                        setSettings({
+                          ...settings,
+                          llm_connection: {
+                            ...settings.llm_connection,
+                            execution_mode: mode,
+                            max_steps: undefined,
+                          },
+                        })
+                      }
+                    >
+                      {mode}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
             <div className="space-y-2">

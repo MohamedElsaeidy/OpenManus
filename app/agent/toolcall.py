@@ -179,6 +179,7 @@ class ToolCallAgent(ReActAgent):
                     )
                 },
             )
+        self.tool_calls_used += len(tool_calls)
 
         content = response.content if response and response.content else ""
         self._last_assistant_content = content.strip()
@@ -857,21 +858,24 @@ class ToolCallAgent(ReActAgent):
         """Check if tool name is in special tools list."""
         return name.lower() in [n.lower() for n in self.special_tool_names]
 
-    async def _finalize_after_step_limit(self, task: Task) -> Optional[str]:
-        """Request one structured completion after the work-step budget is spent."""
+    async def _finalize_after_budget(self, task: Task, reason: str) -> Optional[str]:
+        """Request one structured completion after a hard budget is spent."""
         task.emit(
             "agent:lifecycle:finalization:start",
             {
                 "step": self.current_step,
-                "max_steps": self.max_steps,
+                "total_step": self.total_steps,
+                "slice": self.current_slice,
                 "agent": self.name,
+                "reason": reason,
             },
         )
         final_prompt = Message.user_message(
-            "The work-step budget is exhausted. Do not perform more work. Review the "
-            "tool results already in memory and call terminate now. Use status=success "
-            "only if the requested deliverable was created and verified; otherwise use "
-            "status=failure with the exact blocker. Include artifact paths in the summary."
+            f"The execution circuit breaker fired: {reason} Do not perform more work. "
+            "Review the completed tool results and call terminate now. Use status=success "
+            "if the requested outcome is already complete and verified. Otherwise use "
+            "status=failure, summarize completed work, give the exact remaining blocker, "
+            "and include artifact paths."
         )
         system_msgs = (
             [Message.system_message(self.system_prompt)] if self.system_prompt else []
@@ -928,6 +932,12 @@ class ToolCallAgent(ReActAgent):
             },
         )
         return self.final_response or observation
+
+    async def _finalize_after_step_limit(self, task: Task) -> Optional[str]:
+        """Compatibility wrapper for callers using the previous loop API."""
+        return await self._finalize_after_budget(
+            task, "The legacy execution step guard was reached."
+        )
 
     async def cleanup(self):
         """Clean up resources used by the agent's tools."""

@@ -1,8 +1,4 @@
-from server.model_calibration import (
-    parse_lms_estimate,
-    parse_nvidia_smi,
-    resource_fit,
-)
+from server.model_calibration import parse_lms_estimate, parse_nvidia_smi, resource_fit
 
 
 def test_parse_lms_estimate_extracts_memory_and_confidence():
@@ -28,8 +24,12 @@ def test_parse_nvidia_smi_aggregates_valid_device_rows():
     )
 
     assert [device["index"] for device in devices] == [0, 1]
-    assert sum(device["total_bytes"] for device in devices) == (11264 + 24564) * 1024**2
-    assert sum(device["used_bytes"] for device in devices) == (10240 + 23000) * 1024**2
+    assert (
+        sum(device["total_bytes"] for device in devices) == (11264 + 24564) * 1024**2
+    )
+    assert (
+        sum(device["used_bytes"] for device in devices) == (10240 + 23000) * 1024**2
+    )
 
 
 def test_resource_fit_enforces_gpu_then_ram_limits():

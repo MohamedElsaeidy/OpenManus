@@ -75,7 +75,13 @@ class RunflowSettings(BaseModel):
 
 
 class AgentSettings(BaseModel):
-    max_steps: int = Field(default=120, description="Maximum steps for agent execution")
+    execution_mode: str = Field(
+        default="balanced", description="Execution policy: fast, balanced, or deep"
+    )
+    max_steps: int = Field(
+        default=24,
+        description="Legacy compatibility override for steps per execution slice",
+    )
     max_tools_per_step: int = Field(
         default=6, description="Maximum number of tool calls executed in one step"
     )

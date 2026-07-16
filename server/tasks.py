@@ -12,6 +12,7 @@ from typing import Optional
 import redis as redis_lib
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.agent.execution_policy import ExecutionPolicy
 from app.agent.manus import Manus
 from app.config import config
 from app.memory.agentmemory import agentmemory
@@ -20,6 +21,7 @@ from app.sandbox.conversation import ConversationSandbox
 from app.skills import format_skill_context, load_skills, select_skills
 from app.task_context import (
     current_auto_context_compress,
+    current_execution_usage,
     current_llm_connection,
     current_model,
     current_requested_context_window,
@@ -49,6 +51,35 @@ TASK_HARD_TIMEOUT_SECONDS = int(
 _redis_client: Optional[redis_lib.Redis] = None
 WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:[^\]]*)\]\]")
 TAG_RE = re.compile(r"(^|\s)#([A-Za-z0-9_\-\/]+)")
+
+
+def resolve_execution_policy(connection: dict) -> tuple[ExecutionPolicy, str]:
+    configured_mode = str(
+        connection.get("execution_mode") or config.agent.execution_mode or "balanced"
+    ).lower()
+    mode = (
+        configured_mode
+        if configured_mode in {"fast", "balanced", "deep"}
+        else "balanced"
+    )
+    policy = ExecutionPolicy.for_mode(mode)
+    source = "llm_connection" if connection.get("execution_mode") else "config"
+
+    legacy_steps = connection.get("max_steps")
+    if not connection.get("execution_mode") and legacy_steps not in (None, ""):
+        try:
+            slice_steps = max(1, min(int(legacy_steps), 200))
+            policy = policy.model_copy(update={"slice_steps": slice_steps})
+            source = "legacy_max_steps"
+        except (TypeError, ValueError):
+            pass
+
+    graceful_wall_limit = max(15, max(30, TASK_HARD_TIMEOUT_SECONDS) - 30)
+    if policy.max_wall_time_seconds > graceful_wall_limit:
+        policy = policy.model_copy(
+            update={"max_wall_time_seconds": graceful_wall_limit}
+        )
+    return policy, source
 
 
 def _lmstudio_native_base(base_url: str) -> Optional[str]:
@@ -494,6 +525,20 @@ def get_task_identity_notes(task_id: str) -> str:
     return str(task_input.get("identity_notes") or "").strip()
 
 
+def get_conversation_llm_connection(conversation_id: str) -> dict:
+    try:
+        conversation_uuid = uuid.UUID(str(conversation_id))
+    except (TypeError, ValueError):
+        return {}
+    with registry.SessionLocal() as session:
+        conversation = session.get(ConversationORM, conversation_uuid)
+        settings = conversation.settings if conversation is not None else {}
+        connection = (
+            settings.get("llm_connection", {}) if isinstance(settings, dict) else {}
+        )
+        return dict(connection) if isinstance(connection, dict) else {}
+
+
 def conversation_workspace(conversation_id: str) -> Path:
     return (
         Path(os.getenv("OPENMANUS_WORKSPACE_ROOT", "/app/workspace"))
@@ -892,7 +937,9 @@ def run_task(task_id: str, prompt: Optional[str] = None):
     enable_vendor_skills = get_task_enable_vendor_skills(task_id)
     pinned_skills = get_task_pinned_skills(task_id)
     identity_notes = get_task_identity_notes(task_id)
-    llm_connection = get_llm_connection()
+    llm_connection = (
+        get_conversation_llm_connection(conversation_id) or get_llm_connection()
+    )
     workspace_root = conversation_workspace(conversation_id)
     host_workspace_root = host_conversation_workspace(conversation_id)
     agent_outcome = {"status": "success", "reason": ""}
@@ -911,6 +958,9 @@ def run_task(task_id: str, prompt: Optional[str] = None):
         )
         selected_connection = resolve_llm_connection(llm_connection, wrapped)
         llm_connection_token = current_llm_connection.set(selected_connection)
+        execution_usage_token = current_execution_usage.set(
+            {"input": 0, "completion": 0, "total": 0}
+        )
         if config.sandbox.use_sandbox:
             sandbox = await ConversationSandbox(
                 conversation_id=conversation_id,
@@ -985,28 +1035,21 @@ def run_task(task_id: str, prompt: Optional[str] = None):
             agent_workspace = (
                 config.sandbox.work_dir if sandbox is not None else str(workspace_root)
             )
-            try:
-                agent_max_steps = int(
-                    selected_connection.get("max_steps") or config.agent.max_steps
-                )
-            except (TypeError, ValueError):
-                agent_max_steps = config.agent.max_steps
-            agent_max_steps = max(1, min(agent_max_steps, 200))
+            execution_policy, policy_source = resolve_execution_policy(
+                selected_connection
+            )
             wrapped.emit(
                 "agent_configuration",
                 {
-                    "max_steps": agent_max_steps,
-                    "max_steps_source": (
-                        "llm_connection"
-                        if selected_connection.get("max_steps") not in (None, "")
-                        else "config"
-                    ),
+                    "execution_policy": execution_policy.public_summary(),
+                    "source": policy_source,
                 },
             )
             agent = await Manus.create(
                 workspace_root=agent_workspace,
                 disabled_tools=disabled_tools,
-                max_steps=agent_max_steps,
+                max_steps=execution_policy.slice_steps,
+                execution_policy=execution_policy,
             )
             result = await agent.run(wrapped, run_prompt)
             agent_outcome["status"] = agent.final_status or "success"
@@ -1025,6 +1068,7 @@ def run_task(task_id: str, prompt: Optional[str] = None):
             current_requested_context_window.reset(requested_context_window_token)
             current_auto_context_compress.reset(auto_context_compress_token)
             current_llm_connection.reset(llm_connection_token)
+            current_execution_usage.reset(execution_usage_token)
             os.chdir(previous_cwd)
 
     try:

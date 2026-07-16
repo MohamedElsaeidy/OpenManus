@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.agent.base import Task
+from app.agent.execution_policy import ExecutionPolicy
 from app.agent.toolcall import ToolCallAgent
 from app.schema import AgentPhase, AgentState, Function, ToolCall
 
@@ -150,6 +151,9 @@ class TestAgentLoopIntegration:
             ),
         )
         agent.max_steps = 1
+        agent.execution_policy = agent.execution_policy.model_copy(
+            update={"slice_steps": 1, "max_continuations": 0}
+        )
         mock_ask = AsyncMock(
             side_effect=[
                 MockLLMResponse(content="Verifying", tool_calls=[work]),
@@ -165,8 +169,83 @@ class TestAgentLoopIntegration:
             result = await agent.run(task, "create an artifact")
 
         assert mock_ask.await_count == 2
+        assert len(mock_ask.await_args_list[1].kwargs["tools"]) == 1
         assert result == "artifact.tex and artifact.pdf were created and verified"
         assert agent.final_status == "success"
+
+    @pytest.mark.asyncio
+    async def test_slice_boundary_resumes_with_full_tools(self, agent, task):
+        work = ToolCall(
+            id="work_first_slice",
+            function=Function(name="bash", arguments='{"command":"echo partial"}'),
+        )
+        terminate = ToolCall(
+            id="terminate_second_slice",
+            function=Function(
+                name="terminate",
+                arguments='{"status":"success","summary":"continued and verified"}',
+            ),
+        )
+        agent.max_steps = 1
+        agent.execution_policy = agent.execution_policy.model_copy(
+            update={"slice_steps": 1, "max_continuations": 1}
+        )
+        mock_ask = AsyncMock(
+            side_effect=[
+                MockLLMResponse(content="Starting work", tool_calls=[work]),
+                MockLLMResponse(content="Done", tool_calls=[terminate]),
+            ]
+        )
+
+        with patch.object(agent.llm, "ask_tool", mock_ask), patch.object(
+            agent.llm, "format_messages", return_value=[]
+        ), patch.object(agent.llm, "count_message_tokens", return_value=100), patch(
+            "app.agent.base.SANDBOX_CLIENT.cleanup", new=AsyncMock()
+        ):
+            result = await agent.run(task, "complete a multi-pass task")
+
+        assert result == "continued and verified"
+        assert agent.current_slice == 2
+        assert agent.total_steps == 2
+        assert len(mock_ask.await_args_list[1].kwargs["tools"]) > 1
+
+    @pytest.mark.asyncio
+    async def test_hard_token_budget_uses_finalization_only(self, agent, task):
+        from app.task_context import current_execution_usage
+
+        terminate = ToolCall(
+            id="terminate_budget",
+            function=Function(
+                name="terminate",
+                arguments=(
+                    '{"status":"failure","summary":"partial work preserved",'
+                    '"reason":"token budget reached"}'
+                ),
+            ),
+        )
+        agent.execution_policy = ExecutionPolicy.for_mode("fast").model_copy(
+            update={"token_budget": 1}
+        )
+        usage_token = current_execution_usage.set(
+            {"input": 1, "completion": 0, "total": 1}
+        )
+        mock_ask = AsyncMock(
+            return_value=MockLLMResponse(content="Finalizing", tool_calls=[terminate])
+        )
+        try:
+            with patch.object(agent.llm, "ask_tool", mock_ask), patch.object(
+                agent.llm, "format_messages", return_value=[]
+            ), patch.object(agent.llm, "count_message_tokens", return_value=100), patch(
+                "app.agent.base.SANDBOX_CLIENT.cleanup", new=AsyncMock()
+            ):
+                result = await agent.run(task, "large task")
+        finally:
+            current_execution_usage.reset(usage_token)
+
+        assert result == "partial work preserved"
+        assert agent.final_status == "failure"
+        assert agent.total_steps == 0
+        assert len(mock_ask.await_args.kwargs["tools"]) == 1
 
     @pytest.mark.asyncio
     async def test_tool_retry_on_error(self, agent, task):

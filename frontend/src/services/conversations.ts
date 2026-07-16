@@ -12,6 +12,22 @@ export interface Conversation {
     pinned_skills?: string[];
     identity_notes?: string;
     auto_skill_curator?: boolean;
+    max_tokens?: number;
+    thinking_budget?: number;
+    enable_thinking?: boolean;
+    performance_mode?: boolean;
+    llm_connection?: {
+      model?: string;
+      base_url?: string;
+      api_key?: string;
+      api_type?: string;
+      max_tokens?: number;
+      thinking_budget?: number;
+      execution_mode?: 'fast' | 'balanced' | 'deep';
+      enable_thinking?: boolean;
+      max_steps?: number;
+      [key: string]: unknown;
+    };
     skill_suggestions?: Array<{
       key: string;
       tools: string[];
@@ -168,6 +184,14 @@ export interface IntegrationsHealth {
   };
 }
 
+interface StoredConnectionProfile {
+  id?: string;
+  style?: string;
+  host?: string;
+  apiKey?: string;
+  defaultModel?: string;
+}
+
 export async function listConversations(): Promise<{ conversations: Conversation[] }> {
   const response = await fetch('/api/conversations', {
     credentials: 'same-origin',
@@ -181,9 +205,12 @@ export function getActiveConnectionPayload(selectedModel?: string): Record<strin
     const rawProfiles = localStorage.getItem('openmanus.connection.profiles');
     const activeId = localStorage.getItem('openmanus.connection.activeProfileId') || 'default';
     if (!rawProfiles) return undefined;
-    const profiles = JSON.parse(rawProfiles);
-    const activeProfile = Array.isArray(profiles)
-      ? profiles.find((p: any) => p.id === activeId) || profiles[0]
+    const parsedProfiles: unknown = JSON.parse(rawProfiles);
+    const profiles = Array.isArray(parsedProfiles)
+      ? (parsedProfiles as StoredConnectionProfile[])
+      : [];
+    const activeProfile = profiles.length
+      ? profiles.find(profile => profile.id === activeId) || profiles[0]
       : null;
     if (!activeProfile) return undefined;
 
@@ -193,7 +220,8 @@ export function getActiveConnectionPayload(selectedModel?: string): Record<strin
       'openai': 'openai',
       'custom': 'custom',
     };
-    const api_type = styleToApiType[activeProfile.style] || activeProfile.style || 'lmstudio';
+    const style = activeProfile.style || 'custom';
+    const api_type = styleToApiType[style] || style;
     let base_url = activeProfile.host || '';
     if (!base_url) {
       if (activeProfile.style === 'lm-studio') base_url = 'http://127.0.0.1:1234';
@@ -392,6 +420,7 @@ export async function updateConversationSettings(
     pinned_skills?: string[];
     identity_notes?: string;
     auto_skill_curator?: boolean;
+    performance_mode?: boolean;
     llm_connection?: Record<string, unknown>;
   },
 ): Promise<Conversation> {

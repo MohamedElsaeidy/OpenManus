@@ -6,6 +6,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import {
   getConversation,
+  getActiveConnectionPayload,
   getIntegrationsHealth,
   listSkills,
   updateConversationSettings,
@@ -15,9 +16,9 @@ import {
 } from '@/services/conversations';
 import { listModels, type ModelOption } from '@/services/models';
 import { listTools } from '@/services/tools';
-import type { ToolOption } from '@/services/admin';
+import type { ExecutionMode, ToolOption } from '@/services/admin';
 import { BrainCircuit, RefreshCcw, Save, SlidersHorizontal, Wrench } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 
@@ -36,14 +37,14 @@ export default function ConversationSettingsPage() {
   const [autoSkillCurator, setAutoSkillCurator] = useState(true);
   const [maxTokens, setMaxTokens] = useState<number | ''>('');
   const [thinkingBudget, setThinkingBudget] = useState<number | ''>('');
-  const [maxSteps, setMaxSteps] = useState<number | ''>('');
+  const [executionMode, setExecutionMode] = useState<ExecutionMode>('balanced');
   const [enableThinking, setEnableThinking] = useState<'auto' | 'on' | 'off'>('auto');
   const [performanceMode, setPerformanceMode] = useState(false);
   const [health, setHealth] = useState<IntegrationsHealth | null>(null);
   const [isHealthLoading, setIsHealthLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
-  const refreshHealth = async (showErrors = false) => {
+  const refreshHealth = useCallback(async (showErrors = false) => {
     if (!conversationId) return;
     setIsHealthLoading(true);
     try {
@@ -56,7 +57,7 @@ export default function ConversationSettingsPage() {
     } finally {
       setIsHealthLoading(false);
     }
-  };
+  }, [conversationId]);
 
   useEffect(() => {
     if (!conversationId) return;
@@ -73,12 +74,13 @@ export default function ConversationSettingsPage() {
         setPinnedSkills(loadedConversation.settings?.pinned_skills || []);
         setIdentityNotes(loadedConversation.settings?.identity_notes || '');
         setAutoSkillCurator(loadedConversation.settings?.auto_skill_curator ?? true);
-        setMaxTokens((loadedConversation.settings as any)?.max_tokens ?? '');
-        setThinkingBudget((loadedConversation.settings as any)?.thinking_budget ?? '');
-        setMaxSteps((loadedConversation.settings as any)?.max_steps ?? '');
-        const et = (loadedConversation.settings as any)?.enable_thinking;
+        const connection = loadedConversation.settings?.llm_connection || {};
+        setMaxTokens(connection.max_tokens ?? loadedConversation.settings?.max_tokens ?? '');
+        setThinkingBudget(connection.thinking_budget ?? loadedConversation.settings?.thinking_budget ?? '');
+        setExecutionMode(connection.execution_mode || 'balanced');
+        const et = connection.enable_thinking ?? loadedConversation.settings?.enable_thinking;
         setEnableThinking(et === true ? 'on' : et === false ? 'off' : 'auto');
-        setPerformanceMode(Boolean((loadedConversation.settings as any)?.performance_mode));
+        setPerformanceMode(Boolean(loadedConversation.settings?.performance_mode));
       })
       .catch(error => toast.error(error instanceof Error ? error.message : 'Could not load settings'));
   }, [conversationId]);
@@ -90,7 +92,7 @@ export default function ConversationSettingsPage() {
       if (!document.hidden) refreshHealth();
     }, 30000);
     return () => window.clearInterval(timer);
-  }, [conversationId]);
+  }, [conversationId, refreshHealth]);
 
   if (!conversation || !conversationId) {
     return <div className="p-6 text-sm text-muted-foreground">Loading conversation settings...</div>;
@@ -131,12 +133,18 @@ export default function ConversationSettingsPage() {
         pinned_skills: pinnedSkills,
         identity_notes: identityNotes,
         auto_skill_curator: autoSkillCurator,
-        max_tokens: maxTokens !== '' ? maxTokens : undefined,
-        thinking_budget: thinkingBudget !== '' ? thinkingBudget : undefined,
-        max_steps: maxSteps !== '' ? maxSteps : undefined,
-        enable_thinking: enableThinking === 'auto' ? undefined : enableThinking === 'on',
         performance_mode: performanceMode,
-      } as any);
+        llm_connection: {
+          ...(getActiveConnectionPayload(model) || {}),
+          ...(conversation.settings?.llm_connection || {}),
+          model,
+          max_tokens: maxTokens !== '' ? maxTokens : undefined,
+          thinking_budget: thinkingBudget !== '' ? thinkingBudget : undefined,
+          execution_mode: executionMode,
+          max_steps: undefined,
+          enable_thinking: enableThinking === 'auto' ? undefined : enableThinking === 'on',
+        },
+      });
       setConversation(saved);
       toast.success('Conversation settings saved');
     } catch (error) {
@@ -348,12 +356,11 @@ export default function ConversationSettingsPage() {
               LLM Limits
             </CardTitle>
             <CardDescription>
-              Override max output tokens, thinking budget, and agent steps for this conversation.
-              Leave blank to use global defaults.
+              Conversation-specific generation and execution policy.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid gap-4 md:grid-cols-3">
+            <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">Max Output Tokens</Label>
                 <Input
@@ -375,14 +382,25 @@ export default function ConversationSettingsPage() {
                   onChange={e => setThinkingBudget(e.target.value === '' ? '' : Number(e.target.value))}
                 />
               </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Max Agent Steps</Label>
-                <Input
-                  type="number"
-                  placeholder="30 (global default)"
-                  value={maxSteps}
-                  onChange={e => setMaxSteps(e.target.value === '' ? '' : Number(e.target.value))}
-                />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Execution Mode</Label>
+              <div className="grid max-w-xl grid-cols-3 overflow-hidden rounded-md border">
+                {(['fast', 'balanced', 'deep'] as ExecutionMode[]).map(mode => (
+                  <button
+                    key={mode}
+                    type="button"
+                    className={`h-9 border-r px-3 text-sm capitalize last:border-r-0 ${
+                      executionMode === mode
+                        ? 'bg-primary text-primary-foreground'
+                        : 'bg-background text-muted-foreground hover:bg-muted'
+                    }`}
+                    onClick={() => setExecutionMode(mode)}
+                  >
+                    {mode}
+                  </button>
+                ))}
               </div>
             </div>
 

@@ -43,3 +43,23 @@ def test_internal_finish_preserves_final_response_without_completing_stream():
         "agent:lifecycle:state:change"
     ]
     assert progress[0]["content"]["final_response"] == "Finished cleanly."
+
+
+def test_execution_slice_is_a_resumable_state_change():
+    progress = _agent_event_to_progress(
+        {
+            "type": "execution_slice",
+            "data": {
+                "state": "continuing",
+                "completed_slice": 1,
+                "next_slice": 2,
+                "mode": "balanced",
+            },
+        }
+    )
+
+    assert _names("execution_slice", {"state": "continuing"}) == [
+        "agent:lifecycle:state:change"
+    ]
+    assert progress[0]["content"]["state"] == "continuing"
+    assert progress[0]["content"]["next_slice"] == 2

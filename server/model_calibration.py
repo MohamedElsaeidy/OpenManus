@@ -116,9 +116,7 @@ def read_resource_snapshot() -> dict[str, Any]:
             "total_bytes": gpu_total,
             "used_bytes": gpu_used,
             "free_bytes": max(0, gpu_total - gpu_used),
-            "used_percent": round(gpu_used * 100 / gpu_total, 2)
-            if gpu_total
-            else None,
+            "used_percent": round(gpu_used * 100 / gpu_total, 2) if gpu_total else None,
         },
         "ram": {
             "source": "procfs" if ram_total else "unavailable",
@@ -140,10 +138,16 @@ def resource_fit(
 ) -> tuple[bool, str]:
     gpu_percent = (snapshot.get("gpu") or {}).get("used_percent")
     if gpu_percent is not None and gpu_percent > gpu_target_percent:
-        return False, f"GPU use {gpu_percent:.1f}% exceeds {gpu_target_percent:.1f}% target"
+        return (
+            False,
+            f"GPU use {gpu_percent:.1f}% exceeds {gpu_target_percent:.1f}% target",
+        )
     ram_percent = (snapshot.get("ram") or {}).get("used_percent")
     if ram_percent is not None and ram_percent > ram_target_percent:
-        return False, f"RAM use {ram_percent:.1f}% exceeds {ram_target_percent:.1f}% target"
+        return (
+            False,
+            f"RAM use {ram_percent:.1f}% exceeds {ram_target_percent:.1f}% target",
+        )
     return True, "within resource targets"
 
 
@@ -189,7 +193,9 @@ class LMStudioCalibrationRunner:
             (
                 candidate
                 for candidate in candidates
-                if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK)
+                if candidate
+                and os.path.isfile(candidate)
+                and os.access(candidate, os.X_OK)
             ),
             None,
         )
@@ -231,7 +237,8 @@ class LMStudioCalibrationRunner:
         }
         values.update(str(item) for item in (row.get("variants") or []))
         return model_id in values or any(
-            value and (value.startswith(f"{model_id}@") or model_id.startswith(f"{value}@"))
+            value
+            and (value.startswith(f"{model_id}@") or model_id.startswith(f"{value}@"))
             for value in values
         )
 
@@ -370,7 +377,9 @@ class LMStudioCalibrationRunner:
             )
         if applied_kv is not None and bool(applied_kv) != kv_on_gpu:
             location = "GPU" if applied_kv else "RAM"
-            raise RuntimeError(f"LM Studio placed KV cache in {location}, not {kv_cache.upper()}")
+            raise RuntimeError(
+                f"LM Studio placed KV cache in {location}, not {kv_cache.upper()}"
+            )
 
         snapshot = read_resource_snapshot()
         gpu_before = (unloaded_snapshot.get("gpu") or {}).get("used_bytes")
@@ -457,7 +466,7 @@ class LMStudioCalibrationRunner:
         for step in range(MAX_SEARCH_STEPS):
             if upper - lower < CONTEXT_GRANULARITY:
                 break
-            middle = ((lower + upper + CONTEXT_GRANULARITY) // 2)
+            middle = (lower + upper + CONTEXT_GRANULARITY) // 2
             middle = (middle // CONTEXT_GRANULARITY) * CONTEXT_GRANULARITY
             if middle <= lower:
                 break
@@ -520,7 +529,9 @@ class LMStudioCalibrationRunner:
             response, duration = post(
                 {
                     "model": self.model_id,
-                    "messages": [{"role": "user", "content": "List ten prime numbers."}],
+                    "messages": [
+                        {"role": "user", "content": "List ten prime numbers."}
+                    ],
                     "temperature": 0,
                     "max_tokens": 96,
                 }
@@ -601,7 +612,9 @@ class LMStudioCalibrationRunner:
         self.status("detect", "Reading LM Studio model and host resources", 5)
         models = self._models()
         llms = [row for row in models if row.get("type") in {"llm", "vlm"}]
-        embeddings = [row for row in models if row.get("type") in {"embedding", "embeddings"}]
+        embeddings = [
+            row for row in models if row.get("type") in {"embedding", "embeddings"}
+        ]
         if not self.model_id and llms:
             self.model_id = str(llms[0].get("key") or llms[0].get("id") or "")
         if not self.embedding_model:
@@ -665,7 +678,8 @@ class LMStudioCalibrationRunner:
         recommended = "fast"
         if (
             deep_profile["context_length"] > fast_profile["context_length"] * 1.5
-            and deep_profile["generation_speed"] >= fast_profile["generation_speed"] * 0.85
+            and deep_profile["generation_speed"]
+            >= fast_profile["generation_speed"] * 0.85
         ):
             recommended = "deep"
 

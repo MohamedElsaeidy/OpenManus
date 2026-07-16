@@ -117,8 +117,11 @@ use_data_analysis_agent = false     # The Data Analysi Agent to solve various da
 
 # Agent configuration
 [agent]
-# Maximum number of steps the agent can take
-max_steps = 160
+# Execution policy combines resumable slices with token, time, tool-call,
+# continuation, and repeated-action circuit breakers.
+execution_mode = "balanced" # fast, balanced, or deep
+# Legacy compatibility override for work steps in one resumable slice.
+# max_steps = 24
 # Maximum number of tool calls allowed in a single step
 max_tools_per_step = 6
 

@@ -40,8 +40,7 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
   const [performanceMode, setPerformanceMode] = useState(
     () => localStorage.getItem('openmanus.performanceMode') === '1',
   );
-  // Step progress and token tracking (driven by agent events)
-  const [stepProgress, setStepProgress] = useState<{ current: number; max: number } | null>(null);
+  const [executionProgress, setExecutionProgress] = useState<{ mode: string; slice: number } | null>(null);
   const [totalTokens, setTotalTokens] = useState(0);
 
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -153,13 +152,13 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
           seenEventKeysRef.current.add(key);
           const newMessage = toMessage({ ...data, id: key, task_id: taskId });
 
-          // --- Step progress ---
           if (data.name === 'agent:lifecycle:step:start') {
-            const step = Number(data.content?.step ?? 0);
-            const max = Number(data.content?.max_steps ?? 0);
-            if (step > 0) setStepProgress({ current: step, max });
+            setExecutionProgress({
+              mode: String(data.content?.mode || 'balanced'),
+              slice: Number(data.content?.slice || 1),
+            });
           } else if (data.name === 'agent:lifecycle:complete' || data.name === 'agent:lifecycle:terminated') {
-            setStepProgress(null);
+            setExecutionProgress(null);
           }
 
           // --- Token counter ---
@@ -525,9 +524,10 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
           ) : (
             <div className="hidden text-xs text-muted-foreground sm:block">Idle</div>
           )}
-          {stepProgress && stepProgress.current > 0 && (
+          {executionProgress && (
             <div className="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground">
-              <span>Step {stepProgress.current}</span>
+              <span className="capitalize">{executionProgress.mode}</span>
+              {executionProgress.slice > 1 && <span>· pass {executionProgress.slice}</span>}
             </div>
           )}
           {totalTokens > 0 && (

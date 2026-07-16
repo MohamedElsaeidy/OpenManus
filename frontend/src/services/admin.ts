@@ -1,5 +1,7 @@
 import type { ModelOption } from './models';
 
+export type ExecutionMode = 'fast' | 'balanced' | 'deep';
+
 export interface ToolOption {
   name: string;
   label: string;
@@ -17,6 +19,8 @@ export interface AdminSettings {
     max_tokens?: number;
     temperature?: number;
     thinking_budget?: number;
+    execution_mode?: ExecutionMode;
+    /** Accepted from older server settings and removed on the next save. */
     max_steps?: number;
     context_window?: number;
     calibration_mode?: CalibrationMode;

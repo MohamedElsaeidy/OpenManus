@@ -636,6 +636,15 @@ def _effective_llm_connection(session) -> dict:
     return default.model_dump(mode="json") if default is not None else {}
 
 
+def _merge_conversation_llm_connection(session, settings: dict, incoming: dict) -> dict:
+    existing = settings.get("llm_connection", {}) if isinstance(settings, dict) else {}
+    return {
+        **_effective_llm_connection(session),
+        **(existing if isinstance(existing, dict) else {}),
+        **(incoming if isinstance(incoming, dict) else {}),
+    }
+
+
 def _lmstudio_native_base(base_url: str) -> Optional[str]:
     try:
         parsed = urlparse.urlparse(base_url.strip())
@@ -877,6 +886,7 @@ def _agent_event_to_progress(event: dict) -> list[dict]:
       terminated     → agent:lifecycle:terminated
       browser_screenshot → agent:lifecycle:step:think:browser:browse:complete
       token_count    → agent:lifecycle:step:think:token:count
+      execution_slice / execution_budget → agent:lifecycle:state:change
       context_compressed → agent:lifecycle:step:think:context:compressed
       terminal_output → agent:lifecycle:step:act:tool:terminal:output
       workspace_file_updated → agent:lifecycle:step:act:tool:file:updated
@@ -1024,6 +1034,19 @@ def _agent_event_to_progress(event: dict) -> list[dict]:
 
     if agent_type == "token_count":
         return [_msg("agent:lifecycle:step:think:token:count", data)]
+
+    if agent_type in {
+        "agent_configuration",
+        "execution_policy",
+        "execution_slice",
+        "execution_budget",
+    }:
+        return [
+            _msg(
+                "agent:lifecycle:state:change",
+                {**data, "state": data.get("state") or agent_type},
+            )
+        ]
 
     if agent_type == "context_compressed":
         return [_msg("agent:lifecycle:step:think:context:compressed", data)]
@@ -1917,6 +1940,7 @@ async def update_admin_settings(request: Request):
                     "max_tokens",
                     "temperature",
                     "thinking_budget",
+                    "execution_mode",
                     "max_steps",
                     "context_window",
                     "calibration_mode",
@@ -1945,6 +1969,14 @@ async def update_admin_settings(request: Request):
                         detail="llm_connection.max_steps must be between 1 and 200",
                     )
                 allowed["max_steps"] = max_steps
+            if "execution_mode" in allowed:
+                execution_mode = str(allowed["execution_mode"]).strip().lower()
+                if execution_mode not in {"fast", "balanced", "deep"}:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="llm_connection.execution_mode must be fast, balanced, or deep",
+                    )
+                allowed["execution_mode"] = execution_mode
             _set_app_setting(session, "llm_connection", allowed)
         if "tools" in body:
             disabled = [
@@ -3156,6 +3188,8 @@ async def update_conversation_settings(request: Request, conversation_id: str):
             settings["identity_notes"] = str(body.get("identity_notes") or "").strip()
         if "auto_skill_curator" in body:
             settings["auto_skill_curator"] = bool(body.get("auto_skill_curator"))
+        if "performance_mode" in body:
+            settings["performance_mode"] = bool(body.get("performance_mode"))
         if isinstance(body.get("llm_connection"), dict):
             settings["llm_connection"] = body.get("llm_connection")
             _set_app_setting(session, "llm_connection", body.get("llm_connection"))
@@ -3449,11 +3483,14 @@ async def create_task(
                 if parsed_connection and conversation is not None:
                     if not isinstance(conversation.settings, dict):
                         conversation.settings = {}
+                    effective_connection = _merge_conversation_llm_connection(
+                        session, conversation.settings, parsed_connection
+                    )
                     conversation.settings = {
                         **conversation.settings,
-                        "llm_connection": parsed_connection,
+                        "llm_connection": effective_connection,
                     }
-                    _set_app_setting(session, "llm_connection", parsed_connection)
+                    _set_app_setting(session, "llm_connection", effective_connection)
                     session.commit()
                 conversation_settings = (
                     conversation.settings if conversation is not None else {}
@@ -3580,11 +3617,14 @@ async def create_task(
         if parsed_connection and conversation is not None:
             if not isinstance(conversation.settings, dict):
                 conversation.settings = {}
+            effective_connection = _merge_conversation_llm_connection(
+                session, conversation.settings, parsed_connection
+            )
             conversation.settings = {
                 **conversation.settings,
-                "llm_connection": parsed_connection,
+                "llm_connection": effective_connection,
             }
-            _set_app_setting(session, "llm_connection", parsed_connection)
+            _set_app_setting(session, "llm_connection", effective_connection)
         if prompt and conversation.title == "New conversation":
             conversation.title = (
                 prompt.strip().splitlines()[0][:80] or conversation.title
@@ -3697,11 +3737,14 @@ async def send_conversation_message(request: Request, conversation_id: str):
         if llm_connection:
             if not isinstance(conversation.settings, dict):
                 conversation.settings = {}
+            effective_connection = _merge_conversation_llm_connection(
+                session, conversation.settings, llm_connection
+            )
             conversation.settings = {
                 **conversation.settings,
-                "llm_connection": llm_connection,
+                "llm_connection": effective_connection,
             }
-            _set_app_setting(session, "llm_connection", llm_connection)
+            _set_app_setting(session, "llm_connection", effective_connection)
         active_task = next(
             (
                 task

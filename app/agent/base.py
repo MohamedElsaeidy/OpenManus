@@ -1,13 +1,17 @@
+import math
+import time
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
 from typing import Any, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.agent.execution_policy import ExecutionPolicy
 from app.config import config
 from app.llm import LLM
 from app.sandbox.client import SANDBOX_CLIENT
 from app.schema import ROLE_TYPE, AgentState, Memory, Message
+from app.task_context import get_current_token_usage
 from core.task import Task
 
 
@@ -19,7 +23,7 @@ class BaseAgent(BaseModel, ABC):
     """Abstract base class for managing agent state and execution.
 
     Provides foundational functionality for state transitions, memory management,
-    and a step-based execution loop. Subclasses must implement the `step` method.
+    and a budgeted execution loop. Subclasses must implement the `step` method.
     """
 
     # Core attributes
@@ -43,9 +47,19 @@ class BaseAgent(BaseModel, ABC):
 
     # Execution control
     max_steps: int = Field(
-        default=config.agent.max_steps, description="Maximum steps before termination"
+        default=config.agent.max_steps,
+        description="Compatibility alias for steps in one resumable execution slice",
     )
     current_step: int = Field(default=0, description="Current step in execution")
+    total_steps: int = Field(default=0, description="Steps used across all slices")
+    current_slice: int = Field(default=1, description="Current execution slice")
+    tool_calls_used: int = Field(default=0, description="Tool calls used in this run")
+    no_progress_cycles: int = Field(
+        default=0, description="Consecutive repeated-action detections"
+    )
+    execution_policy: ExecutionPolicy = Field(
+        default_factory=lambda: ExecutionPolicy.for_mode(config.agent.execution_mode)
+    )
 
     final_response: Optional[str] = Field(
         default=None,
@@ -135,7 +149,7 @@ class BaseAgent(BaseModel, ABC):
         self.memory.add_message(message_map[role](content, **kwargs))
 
     async def run(self, task: Task, input: Any) -> str:
-        """Execute the agent's main loop asynchronously."""
+        """Execute until semantic completion or a layered circuit breaker fires."""
         if task.is_interrupted():
             raise TaskInterrupted()
 
@@ -148,49 +162,121 @@ class BaseAgent(BaseModel, ABC):
         self.final_response = None
         self.final_status = None
         self.final_reason = None
+        self.current_step = 0
+        self.total_steps = 0
+        self.current_slice = 1
+        self.tool_calls_used = 0
+        self.no_progress_cycles = 0
 
         results: List[str] = []
+        started_at = time.monotonic()
+        guidance_emitted_for_slice = False
         try:
             async with self.state_context(AgentState.RUNNING):
                 task.emit(
                     "agent_state",
                     {"state": "running", "agent": self.name},
                 )
-                while (
-                    self.current_step < self.max_steps
-                    and self.state != AgentState.FINISHED
-                ):
+                task.emit(
+                    "execution_policy",
+                    self.execution_policy.public_summary(),
+                )
+                while self.state != AgentState.FINISHED:
                     if task.is_interrupted():
                         raise TaskInterrupted()
 
+                    budget_reason = self._hard_budget_reason(started_at)
+                    if budget_reason:
+                        await self._finish_after_budget(task, budget_reason, results)
+                        break
+
+                    if self.current_step >= self.max_steps:
+                        if (
+                            self.current_slice
+                            <= self.execution_policy.max_continuations
+                        ):
+                            task.emit(
+                                "execution_slice",
+                                {
+                                    "state": "continuing",
+                                    "completed_slice": self.current_slice,
+                                    "next_slice": self.current_slice + 1,
+                                    "total_steps": self.total_steps,
+                                    "mode": self.execution_policy.mode,
+                                },
+                            )
+                            self.update_memory(
+                                "user",
+                                (
+                                    "Continue the same task from the preserved state. "
+                                    "Re-check the plan and completed tool results, skip work "
+                                    "already done, prioritize the remaining deliverable, and "
+                                    "finish naturally as soon as it is complete and verified."
+                                ),
+                            )
+                            self.current_slice += 1
+                            self.current_step = 0
+                            guidance_emitted_for_slice = False
+                            continue
+
+                        budget_reason = (
+                            f"Execution used all {self.current_slice} permitted work slices "
+                            f"({self.total_steps} model turns)."
+                        )
+                        await self._finish_after_budget(task, budget_reason, results)
+                        break
+
                     self.current_step += 1
-                    if self.current_step == max(1, self.max_steps - 4):
-                        remaining = self.max_steps - self.current_step + 1
+                    self.total_steps += 1
+                    soft_step = max(
+                        1,
+                        math.ceil(
+                            self.max_steps * self.execution_policy.soft_limit_ratio
+                        ),
+                    )
+                    if (
+                        not guidance_emitted_for_slice
+                        and self.current_step >= soft_step
+                    ):
+                        guidance_emitted_for_slice = True
+                        remaining = max(0, self.max_steps - self.current_step)
+                        usage = get_current_token_usage()
                         task.emit(
-                            "warning",
+                            "execution_budget",
                             {
-                                "message": (
-                                    f"{remaining} work steps remain. Prioritize creating "
-                                    "and verifying the requested deliverable."
-                                )
+                                "state": "guidance",
+                                "mode": self.execution_policy.mode,
+                                "slice": self.current_slice,
+                                "remaining_slice_steps": remaining,
+                                "tokens_used": usage["total"],
+                                "token_budget": self.execution_policy.token_budget,
                             },
                         )
                         self.update_memory(
                             "user",
                             (
-                                f"Execution budget notice: {remaining} work steps remain. "
-                                "Stop optional exploration. Create the requested deliverable, "
-                                "verify it, then finish with a concrete result."
+                                "Execution budget guidance: stop optional exploration. "
+                                "Prioritize creating and verifying the requested deliverable. "
+                                "Finish naturally when complete; otherwise preserve a precise "
+                                "remaining-work state for the next execution slice."
                             ),
                         )
                     task.emit(
                         "step_start",
-                        {"step": self.current_step, "max_steps": self.max_steps},
+                        {
+                            "step": self.current_step,
+                            "total_step": self.total_steps,
+                            "slice": self.current_slice,
+                            "mode": self.execution_policy.mode,
+                        },
                     )
                     step_result = await self.step(task)
 
                     if self.is_stuck():
+                        self.no_progress_cycles += 1
                         self.handle_stuck_state(task)
+                    else:
+                        self.no_progress_cycles = 0
 
                     if self.state == AgentState.FINISHED and step_result:
                         results.append(str(step_result))
@@ -201,34 +287,6 @@ class BaseAgent(BaseModel, ABC):
                         {"step": self.current_step, "result": step_result},
                     )
 
-                if (
-                    self.current_step >= self.max_steps
-                    and self.state != AgentState.FINISHED
-                ):
-                    finalization_result = await self._finalize_after_step_limit(task)
-                    if self.state == AgentState.FINISHED:
-                        if finalization_result:
-                            results.append(str(finalization_result))
-                    else:
-                        self.current_step = 0
-                        self.state = AgentState.IDLE
-                        termination_msg = (
-                            f"Terminated: Reached max steps ({self.max_steps})"
-                        )
-                        results.append(termination_msg)
-                        self.final_status = "stuck"
-                        self.final_reason = termination_msg
-                        self.final_response = (
-                            "I couldn't complete the task within the configured step limit."
-                        )
-                        task.emit(
-                            "terminated",
-                            {
-                                "reason": termination_msg,
-                                "status": "stuck",
-                                "message": "Agent stopped because it reached the configured step limit.",
-                            },
-                        )
             if self.final_response:
                 return self.final_response
             return "\n".join(results) if results else "No steps executed"
@@ -244,8 +302,73 @@ class BaseAgent(BaseModel, ABC):
             )
             await SANDBOX_CLIENT.cleanup()
 
-    async def _finalize_after_step_limit(self, task: Task) -> Optional[str]:
+    def _hard_budget_reason(self, started_at: float) -> Optional[str]:
+        usage = get_current_token_usage()
+        elapsed = time.monotonic() - started_at
+        if usage["total"] >= self.execution_policy.token_budget:
+            return (
+                f"Execution reached its {self.execution_policy.token_budget:,}-token "
+                "task budget."
+            )
+        if self.tool_calls_used >= self.execution_policy.max_tool_calls:
+            return (
+                f"Execution reached its {self.execution_policy.max_tool_calls} "
+                "tool-call safety limit."
+            )
+        if elapsed >= self.execution_policy.max_wall_time_seconds:
+            return (
+                f"Execution reached its {self.execution_policy.max_wall_time_seconds}-second "
+                "wall-time budget."
+            )
+        if self.no_progress_cycles >= self.execution_policy.max_no_progress_cycles:
+            return (
+                "Execution repeatedly selected the same ineffective action without "
+                "making measurable progress."
+            )
+        return None
+
+    async def _finish_after_budget(
+        self, task: Task, reason: str, results: List[str]
+    ) -> None:
+        task.emit(
+            "execution_budget",
+            {
+                "state": "finalizing",
+                "mode": self.execution_policy.mode,
+                "reason": reason,
+                "total_steps": self.total_steps,
+                "tool_calls": self.tool_calls_used,
+                "tokens": get_current_token_usage()["total"],
+            },
+        )
+        finalization_result = await self._finalize_after_budget(task, reason)
+        if self.state == AgentState.FINISHED:
+            if finalization_result:
+                results.append(str(finalization_result))
+            return
+
+        self.final_status = "failure"
+        self.final_reason = reason
+        self.final_response = (
+            "I couldn't complete the task within the configured execution budget. "
+            "Completed work and tool results remain available in this conversation."
+        )
+        self.state = AgentState.FINISHED
+        task.emit(
+            "terminated",
+            {
+                "reason": reason,
+                "status": "budget_exhausted",
+                "message": self.final_response,
+            },
+        )
+
+    async def _finalize_after_budget(self, task: Task, reason: str) -> Optional[str]:
         """Give specialized agents a non-work pass to report their final state."""
+        return await self._finalize_after_step_limit(task)
+
+    async def _finalize_after_step_limit(self, task: Task) -> Optional[str]:
+        """Compatibility hook for subclasses using the previous loop API."""
         return None
 
     @abstractmethod
