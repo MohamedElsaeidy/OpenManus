@@ -113,8 +113,8 @@ class BaseTool(ABC, BaseModel):
     ----------------
     parallel_safe  : Tool can run concurrently with other tools in the same step
                      (no shared mutable state, no exclusive resource locks).
-    can_retry      : A failed call may be retried once with the error injected as
-                     context. Set to False for destructive / non-idempotent tools.
+    can_retry      : A transient failed call may be retried once with identical
+                     arguments. Tools must explicitly opt in.
     emits_progress : Tool streams intermediate progress events during execution.
     """
 
@@ -128,8 +128,8 @@ class BaseTool(ABC, BaseModel):
         description="Safe to run in parallel with other tool calls in the same step.",
     )
     can_retry: bool = Field(
-        default=True,
-        description="Whether a single retry-with-error-feedback is allowed on failure.",
+        default=False,
+        description="Whether an identical retry is safe and useful for transient failures.",
     )
     emits_progress: bool = Field(
         default=False,

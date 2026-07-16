@@ -859,7 +859,7 @@ class ToolCallAgent(ReActAgent):
         return name.lower() in [n.lower() for n in self.special_tool_names]
 
     async def _finalize_after_budget(self, task: Task, reason: str) -> Optional[str]:
-        """Request one structured completion after a hard budget is spent."""
+        """Request a compact structured completion after a circuit breaker fires."""
         task.emit(
             "agent:lifecycle:finalization:start",
             {
@@ -870,22 +870,42 @@ class ToolCallAgent(ReActAgent):
                 "reason": reason,
             },
         )
+        recent_context: list[str] = []
+        for message in self.messages[-10:]:
+            content = " ".join((message.content or "").split())
+            if content:
+                recent_context.append(f"{message.role}: {content[:1200]}")
+            if message.tool_calls:
+                calls = ", ".join(
+                    f"{call.function.name}({call.function.arguments[:500]})"
+                    for call in message.tool_calls
+                )
+                recent_context.append(f"assistant tools: {calls}")
+        if self.pinned_context:
+            recent_context.append(
+                "Pinned artifacts: " + " | ".join(self.pinned_context[-12:])
+            )
+
         final_prompt = Message.user_message(
-            f"The execution circuit breaker fired: {reason} Do not perform more work. "
-            "Review the completed tool results and call terminate now. Use status=success "
-            "if the requested outcome is already complete and verified. Otherwise use "
-            "status=failure, summarize completed work, give the exact remaining blocker, "
-            "and include artifact paths."
+            f"The execution circuit breaker fired: {reason}\n"
+            "Do not perform more work. Based only on the compact execution record "
+            "below, call terminate now. Use status=success only if the requested "
+            "outcome was explicitly verified; otherwise use status=failure. Summarize "
+            "completed work, the exact remaining blocker, and artifact paths.\n\n"
+            + "\n".join(recent_context)
         )
-        system_msgs = (
-            [Message.system_message(self.system_prompt)] if self.system_prompt else []
-        )
-        self._maybe_compress_context(task, system_msgs)
+        system_msgs = [
+            Message.system_message(
+                "You are a strict execution finalizer. Do not continue work or claim "
+                "unverified success. Call the provided terminate tool exactly once."
+            )
+        ]
         response = await self.llm.ask_tool(
-            messages=[*self.messages, final_prompt],
+            messages=[final_prompt],
             system_msgs=system_msgs,
             tools=[Terminate().to_param()],
             tool_choice=ToolChoice.REQUIRED,
+            max_output_tokens=1024,
         )
         content = str(response.content or "").strip() if response else ""
         calls = response.tool_calls if response and response.tool_calls else []

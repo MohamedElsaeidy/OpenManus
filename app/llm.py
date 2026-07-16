@@ -1233,6 +1233,8 @@ class LLM:
         def _template_error_text(exc: Exception) -> str:
             return str(exc).lower()
 
+        max_output_tokens = kwargs.pop("max_output_tokens", None)
+
         def _is_template_user_query_error(exc: Exception) -> bool:
             text = _template_error_text(exc)
             if "no user query found" in text or "user query" in text:
@@ -1343,8 +1345,15 @@ class LLM:
                 **kwargs,
             }
 
+            output_token_limit = self.active_max_tokens()
+            if max_output_tokens is not None:
+                output_token_limit = min(
+                    output_token_limit,
+                    max(1, self._safe_int(max_output_tokens, output_token_limit)),
+                )
+
             if model in REASONING_MODELS:
-                params["max_completion_tokens"] = self.active_max_tokens()
+                params["max_completion_tokens"] = output_token_limit
                 # o3 / o4-mini accept reasoning_effort instead of temperature
                 if model in REASONING_EFFORT_MODELS:
                     effort = reasoning_effort or "medium"
@@ -1352,7 +1361,7 @@ class LLM:
                     # temperature is not valid for these models
                     params.pop("temperature", None)
             else:
-                params["max_tokens"] = self.active_max_tokens()
+                params["max_tokens"] = output_token_limit
                 params["temperature"] = (
                     temperature
                     if temperature is not None
@@ -1452,9 +1461,9 @@ class LLM:
                     if model in REASONING_MODELS:
                         fallback_params[
                             "max_completion_tokens"
-                        ] = self.active_max_tokens()
+                        ] = output_token_limit
                     else:
-                        fallback_params["max_tokens"] = self.active_max_tokens()
+                        fallback_params["max_tokens"] = output_token_limit
                         fallback_params["temperature"] = (
                             temperature
                             if temperature is not None

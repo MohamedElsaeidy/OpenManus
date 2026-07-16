@@ -372,6 +372,43 @@ class TestPlanningTool:
         assert plan["step_statuses"][1] == "not_started"
 
     @pytest.mark.asyncio
+    async def test_update_rejects_mark_step_arguments(self):
+        from app.exceptions import ToolError
+        from app.tool.planning import PlanningTool
+
+        pt = PlanningTool()
+        await pt.execute(
+            command="create",
+            plan_id="wrong-command",
+            title="Wrong command",
+            steps=["Do thing"],
+        )
+        with pytest.raises(ToolError, match="mark_step"):
+            await pt.execute(
+                command="update",
+                plan_id="wrong-command",
+                step_index=0,
+                step_status="in_progress",
+            )
+
+        assert pt.plans["wrong-command"]["step_statuses"] == ["not_started"]
+
+    @pytest.mark.asyncio
+    async def test_update_rejects_no_op(self):
+        from app.exceptions import ToolError
+        from app.tool.planning import PlanningTool
+
+        pt = PlanningTool()
+        await pt.execute(
+            command="create",
+            plan_id="no-op",
+            title="No-op",
+            steps=["Do thing"],
+        )
+        with pytest.raises(ToolError, match="requires title or steps"):
+            await pt.execute(command="update", plan_id="no-op")
+
+    @pytest.mark.asyncio
     async def test_delete_plan(self):
         from app.tool.planning import PlanningTool
 

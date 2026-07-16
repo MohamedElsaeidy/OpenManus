@@ -246,6 +246,28 @@ class TestAgentLoopIntegration:
         assert agent.final_status == "failure"
         assert agent.total_steps == 0
         assert len(mock_ask.await_args.kwargs["tools"]) == 1
+        assert len(mock_ask.await_args.kwargs["messages"]) == 1
+        assert mock_ask.await_args.kwargs["max_output_tokens"] == 1024
+
+    def test_projected_step_cost_preserves_finalization_reserve(self, agent):
+        from app.task_context import current_execution_usage
+
+        agent.execution_policy = ExecutionPolicy.for_mode("balanced").model_copy(
+            update={"token_budget": 320_000}
+        )
+        agent.total_steps = 10
+        agent.last_step_token_cost = 51_151
+        usage_token = current_execution_usage.set(
+            {"input": 258_705, "completion": 35_773, "total": 294_478}
+        )
+        try:
+            reason = agent._hard_budget_reason(0.0)
+        finally:
+            current_execution_usage.reset(usage_token)
+
+        assert reason is not None
+        assert "25,522 tokens left" in reason
+        assert "51,151" in reason
 
     @pytest.mark.asyncio
     async def test_tool_retry_on_error(self, agent, task):

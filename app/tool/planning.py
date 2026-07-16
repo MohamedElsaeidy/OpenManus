@@ -9,6 +9,8 @@ from app.tool.base import BaseTool, ToolResult
 _PLANNING_TOOL_DESCRIPTION = """
 A planning tool that allows the agent to create and manage plans for solving complex tasks.
 The tool provides functionality for creating plans, updating plan steps, and tracking progress.
+Use command=mark_step with step_index and step_status to change progress. The update
+command only changes the plan title or replaces its steps.
 """
 
 
@@ -102,6 +104,11 @@ class PlanningTool(BaseTool):
         if command == "create":
             return self._create_plan(plan_id, title, steps)
         elif command == "update":
+            if step_index is not None or step_status is not None or step_notes is not None:
+                raise ToolError(
+                    "command='update' cannot change step progress. Use "
+                    "command='mark_step' with step_index and step_status."
+                )
             return self._update_plan(plan_id, title, steps)
         elif command == "list":
             return self._list_plans()
@@ -169,6 +176,12 @@ class PlanningTool(BaseTool):
 
         if plan_id not in self.plans:
             raise ToolError(f"No plan found with ID: {plan_id}")
+
+        if title is None and steps is None:
+            raise ToolError(
+                "command='update' requires title or steps. Use command='mark_step' "
+                "to change a step's status."
+            )
 
         plan = self.plans[plan_id]
 

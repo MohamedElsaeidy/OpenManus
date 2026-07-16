@@ -16,6 +16,7 @@ class ExecutionPolicy(BaseModel):
     max_wall_time_seconds: int = Field(ge=1)
     max_tool_calls: int = Field(ge=1)
     max_no_progress_cycles: int = Field(ge=1)
+    step_token_reserve: int = Field(ge=1)
     soft_limit_ratio: float = Field(default=0.8, gt=0.0, lt=1.0)
 
     @classmethod
@@ -30,6 +31,7 @@ class ExecutionPolicy(BaseModel):
                 max_wall_time_seconds=420,
                 max_tool_calls=48,
                 max_no_progress_cycles=2,
+                step_token_reserve=12_000,
             ),
             "balanced": cls(
                 mode="balanced",
@@ -39,6 +41,7 @@ class ExecutionPolicy(BaseModel):
                 max_wall_time_seconds=1_080,
                 max_tool_calls=180,
                 max_no_progress_cycles=3,
+                step_token_reserve=24_000,
             ),
             "deep": cls(
                 mode="deep",
@@ -48,6 +51,7 @@ class ExecutionPolicy(BaseModel):
                 max_wall_time_seconds=1_620,
                 max_tool_calls=480,
                 max_no_progress_cycles=4,
+                step_token_reserve=32_000,
             ),
         }
         return profiles.get(normalized, profiles["balanced"])
@@ -65,4 +69,5 @@ class ExecutionPolicy(BaseModel):
             "max_wall_time_seconds": self.max_wall_time_seconds,
             "max_tool_calls": self.max_tool_calls,
             "max_no_progress_cycles": self.max_no_progress_cycles,
+            "step_token_reserve": self.step_token_reserve,
         }

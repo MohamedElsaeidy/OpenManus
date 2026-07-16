@@ -59,6 +59,12 @@ class BaseAgent(BaseModel, ABC):
     no_progress_cycles: int = Field(
         default=0, description="Consecutive repeated-action detections"
     )
+    last_step_token_cost: int = Field(
+        default=0, description="Token cost of the previous model/tool step"
+    )
+    last_step_duration_seconds: float = Field(
+        default=0.0, description="Wall time consumed by the previous step"
+    )
     execution_policy: ExecutionPolicy = Field(
         default_factory=lambda: ExecutionPolicy.for_mode(config.agent.execution_mode)
     )
@@ -169,6 +175,8 @@ class BaseAgent(BaseModel, ABC):
         self.current_slice = 1
         self.tool_calls_used = 0
         self.no_progress_cycles = 0
+        self.last_step_token_cost = 0
+        self.last_step_duration_seconds = 0.0
 
         results: List[str] = []
         started_at = time.monotonic()
@@ -272,7 +280,16 @@ class BaseAgent(BaseModel, ABC):
                             "mode": self.execution_policy.mode,
                         },
                     )
+                    usage_before_step = get_current_token_usage()["total"]
+                    step_started_at = time.monotonic()
                     step_result = await self.step(task)
+                    self.last_step_token_cost = max(
+                        0,
+                        get_current_token_usage()["total"] - usage_before_step,
+                    )
+                    self.last_step_duration_seconds = max(
+                        0.0, time.monotonic() - step_started_at
+                    )
 
                     if self.is_stuck():
                         self.no_progress_cycles += 1
@@ -312,6 +329,17 @@ class BaseAgent(BaseModel, ABC):
                 f"Execution reached its {self.execution_policy.token_budget:,}-token "
                 "task budget."
             )
+        token_reserve = max(
+            self.execution_policy.step_token_reserve,
+            self.last_step_token_cost,
+        )
+        remaining_tokens = self.execution_policy.token_budget - usage["total"]
+        if self.total_steps > 0 and remaining_tokens <= token_reserve:
+            return (
+                f"Execution has {remaining_tokens:,} tokens left; the next step is "
+                f"projected to require at least {token_reserve:,}. Preserving the "
+                "remaining budget for compact finalization."
+            )
         if self.tool_calls_used >= self.execution_policy.max_tool_calls:
             return (
                 f"Execution reached its {self.execution_policy.max_tool_calls} "
@@ -321,6 +349,14 @@ class BaseAgent(BaseModel, ABC):
             return (
                 f"Execution reached its {self.execution_policy.max_wall_time_seconds}-second "
                 "wall-time budget."
+            )
+        time_reserve = max(30.0, self.last_step_duration_seconds)
+        remaining_seconds = self.execution_policy.max_wall_time_seconds - elapsed
+        if self.total_steps > 0 and remaining_seconds <= time_reserve:
+            return (
+                f"Execution has {remaining_seconds:.0f} seconds left; the next step is "
+                f"projected to require at least {time_reserve:.0f}. Preserving time "
+                "for compact finalization."
             )
         if self.no_progress_cycles >= self.execution_policy.max_no_progress_cycles:
             return (
