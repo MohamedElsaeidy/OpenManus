@@ -1,19 +1,21 @@
-import uuid
-from fastapi import APIRouter, Request, Response, HTTPException
+from fastapi import APIRouter, HTTPException, Request, Response
+
 from server.api.deps import (
-    registry,
+    SESSION_COOKIE,
+    _create_session,
+    _ensure_default_conversation,
     _hash_password,
-    _verify_password,
     _public_user,
     _require_user,
-    _create_session,
     _session_token_from_request,
-    _ensure_default_conversation,
-    SESSION_COOKIE,
+    _verify_password,
+    registry,
 )
-from server.models import UserORM, SessionORM
+from server.models import SessionORM, UserORM
+
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
 
 @router.post("/signup")
 async def signup(request: Request, response: Response):
@@ -49,6 +51,7 @@ async def signup(request: Request, response: Response):
     token = _create_session(response, user_id)
     return {"user": public, "token": token}
 
+
 @router.post("/login")
 async def login(request: Request, response: Response):
     body = await request.json()
@@ -63,6 +66,7 @@ async def login(request: Request, response: Response):
     token = _create_session(response, user_id)
     return {"user": public, "token": token}
 
+
 @router.post("/logout")
 async def logout(request: Request, response: Response):
     token = _session_token_from_request(request)
@@ -74,6 +78,7 @@ async def logout(request: Request, response: Response):
                 session.commit()
     response.delete_cookie(SESSION_COOKIE, path="/")
     return {"ok": True}
+
 
 @router.get("/me")
 async def me(request: Request):

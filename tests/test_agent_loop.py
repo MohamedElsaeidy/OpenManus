@@ -409,6 +409,75 @@ class TestPlanningTool:
             await pt.execute(command="update", plan_id="no-op")
 
     @pytest.mark.asyncio
+    async def test_plan_persists_across_tool_instances(self, tmp_path):
+        from app.task_context import current_workspace
+        from app.tool.planning import PlanningTool
+
+        workspace_token = current_workspace.set(str(tmp_path))
+        try:
+            first = PlanningTool()
+            await first.execute(
+                command="create",
+                plan_id="durable",
+                title="Durable plan",
+                steps=["Inspect", "Edit", "Verify"],
+            )
+            await first.execute(
+                command="mark_step",
+                plan_id="durable",
+                step_index=0,
+                step_status="completed",
+            )
+
+            second = PlanningTool()
+            result = await second.execute(command="get")
+        finally:
+            current_workspace.reset(workspace_token)
+
+        assert "1/3 steps completed" in result.output
+        assert second.plans["durable"]["step_statuses"][0] == "completed"
+        assert (tmp_path / ".openmanus" / "plans.json").is_file()
+
+    @pytest.mark.asyncio
+    async def test_plan_enforces_sequential_steps(self):
+        from app.exceptions import ToolError
+        from app.tool.planning import PlanningTool
+
+        pt = PlanningTool()
+        await pt.execute(
+            command="create",
+            plan_id="sequential",
+            title="Sequential plan",
+            steps=["Inspect", "Edit", "Verify"],
+        )
+
+        with pytest.raises(ToolError, match="Finish or block step 0"):
+            await pt.execute(
+                command="mark_step",
+                plan_id="sequential",
+                step_index=1,
+                step_status="in_progress",
+            )
+
+        await pt.execute(
+            command="mark_step",
+            plan_id="sequential",
+            step_index=0,
+            step_status="completed",
+        )
+        await pt.execute(
+            command="mark_step",
+            plan_id="sequential",
+            step_index=1,
+            step_status="in_progress",
+        )
+        assert pt.plans["sequential"]["step_statuses"] == [
+            "completed",
+            "in_progress",
+            "not_started",
+        ]
+
+    @pytest.mark.asyncio
     async def test_delete_plan(self):
         from app.tool.planning import PlanningTool
 

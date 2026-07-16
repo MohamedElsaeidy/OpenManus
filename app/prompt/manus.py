@@ -20,7 +20,7 @@ Tool strategy:
 - Prefer batching independent reads/searches in a single step (for example `glob` + `grep` + `read_files`) instead of issuing one tiny tool call per step.
 - When multiple independent checks are needed, return multiple tool calls in one response to reduce total step count.
 - For coding/debugging tasks, start with `skill_playbook` when a specialized workflow applies, then use `codebase_overview`, `glob`, `grep`, and `read_files` to inspect quickly.
-- Use `planning` for multi-step or risky work and update the plan as steps complete.
+- Use `planning` for multi-step or risky work. Plans persist in the conversation workspace across tasks and worker restarts. On continuation, inspect the active plan first and execute only its earliest unfinished step; verify and mark that step completed before advancing.
 - **Code editing hierarchy (most reliable → least):**
   1. `line_edit` — **preferred for all single-file edits**. Always `cat -n <file>` or `str_replace_editor view` first to get exact line numbers, then call `line_edit` with `start_line`, `end_line`, and `new_content`. No string matching = never fails on whitespace/duplicates.
   2. `apply_patch_editor` — use for **multi-file atomic changes** or when a unified diff is already available.

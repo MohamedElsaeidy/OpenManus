@@ -1,18 +1,21 @@
 from pathlib import Path
 from typing import Optional
+
 from fastapi import APIRouter, Request
 
 from app.skills import load_skills, select_skills
 from server.api.deps import (
-    registry,
-    _require_user,
-    _require_conversation,
-    _get_app_setting,
     AVAILABLE_TOOLS,
     WORKSPACE_ROOT,
+    _get_app_setting,
+    _require_conversation,
+    _require_user,
+    registry,
 )
 
+
 router = APIRouter(prefix="/api", tags=["tools_skills"])
+
 
 @router.get("/tools")
 async def list_tools(request: Request):
@@ -30,6 +33,7 @@ async def list_tools(request: Request):
             for tool in AVAILABLE_TOOLS
         ]
     }
+
 
 @router.get("/skills")
 async def list_skills(

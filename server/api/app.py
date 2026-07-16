@@ -4,17 +4,18 @@ from sqlalchemy import text
 
 from server.api.deps import registry
 from server.api.routers import (
-    auth,
-    models_llm,
     admin,
-    tools_skills,
+    auth,
     conversations,
+    health,
+    models_llm,
     obsidian,
     sandbox,
     tasks,
+    tools_skills,
     workspace,
-    health,
 )
+
 
 app = FastAPI(title="OpenManus Task API", version="0.1.0")
 
@@ -25,6 +26,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 def _ensure_schema_updates() -> None:
     from server.models import Base
@@ -85,6 +87,7 @@ def _ensure_schema_updates() -> None:
                     "UNIQUE (conversation_id, source_note_id, target_note_id, relation)"
                 )
             )
+
 
 # Run schema migrations
 _ensure_schema_updates()

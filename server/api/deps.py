@@ -1,20 +1,21 @@
-import os
-import uuid
-import secrets
 import hashlib
 import json
-import asyncio
+import os
+import secrets
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
-from fastapi import HTTPException, Request, Response
+
 import redis.asyncio as aioredis
+from fastapi import HTTPException, Request, Response
 
 from app.config import config
 from app.sandbox.conversation import ConversationSandbox
 from core.task_registry import TaskRegistry
-from server.models import UserORM, SessionORM, ConversationORM, TaskORM, AppSettingORM
 from server.api.event_mapping import _agent_event_to_progress
+from server.models import AppSettingORM, ConversationORM, SessionORM, TaskORM, UserORM
+
 
 REDIS_URL = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0")
 DEFAULT_CONVERSATION_ID = os.getenv("OPENMANUS_DEFAULT_CONVERSATION_ID", "main")
@@ -54,8 +55,10 @@ CONVERSATION_STATES = {
 
 TERMINAL_STATUSES = {"COMPLETED", "FAILED", "INTERRUPTED"}
 
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
 
 def _hash_password(password: str, salt: Optional[str] = None) -> str:
     salt = salt or secrets.token_hex(16)
@@ -64,6 +67,7 @@ def _hash_password(password: str, salt: Optional[str] = None) -> str:
         "sha256", password.encode("utf-8"), bytes.fromhex(salt), iterations
     ).hex()
     return f"pbkdf2_sha256${iterations}${salt}${digest}"
+
 
 def _verify_password(password: str, stored: str) -> bool:
     try:
@@ -77,6 +81,7 @@ def _verify_password(password: str, stored: str) -> bool:
     except Exception:
         return False
 
+
 def _session_token_from_request(request: Request) -> Optional[str]:
     token = request.cookies.get(SESSION_COOKIE)
     if token:
@@ -86,6 +91,7 @@ def _session_token_from_request(request: Request) -> Optional[str]:
         return auth.split(" ", 1)[1].strip()
     return None
 
+
 def _public_user(user: UserORM) -> dict:
     return {
         "id": str(user.user_id),
@@ -93,6 +99,7 @@ def _public_user(user: UserORM) -> dict:
         "name": user.name,
         "role": user.role,
     }
+
 
 def _require_user(request: Request) -> UserORM:
     token = _session_token_from_request(request)
@@ -108,11 +115,13 @@ def _require_user(request: Request) -> UserORM:
         session.expunge(user)
         return user
 
+
 def _require_admin(request: Request) -> UserORM:
     user = _require_user(request)
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     return user
+
 
 def _create_session(response: Response, user_id: uuid.UUID) -> str:
     token = secrets.token_urlsafe(32)
@@ -130,6 +139,7 @@ def _create_session(response: Response, user_id: uuid.UUID) -> str:
     )
     return token
 
+
 def _require_conversation(
     session, user_id: uuid.UUID, conversation_id: str
 ) -> ConversationORM:
@@ -142,6 +152,7 @@ def _require_conversation(
         raise HTTPException(status_code=404, detail="Conversation not found")
     return conversation
 
+
 def _task_belongs_to_user(session, orm: TaskORM, user_id: uuid.UUID) -> bool:
     conversation_id = (orm.input or {}).get("conversation_id")
     if not conversation_id:
@@ -152,11 +163,13 @@ def _task_belongs_to_user(session, orm: TaskORM, user_id: uuid.UUID) -> bool:
         return False
     return conversation is not None and conversation.user_id == user_id
 
+
 def _get_app_setting(session, key: str, default: Any) -> Any:
     setting = session.get(AppSettingORM, key)
     if setting is None:
         return default
     return setting.value
+
 
 def _set_app_setting(session, key: str, value: Any) -> None:
     setting = session.get(AppSettingORM, key)
@@ -165,8 +178,10 @@ def _set_app_setting(session, key: str, value: Any) -> None:
     else:
         setting.value = value
 
+
 def _ensure_default_conversation(session, user_id: uuid.UUID) -> ConversationORM:
     from sqlalchemy import asc
+
     conversation = (
         session.query(ConversationORM)
         .filter(ConversationORM.user_id == user_id)
@@ -180,6 +195,7 @@ def _ensure_default_conversation(session, user_id: uuid.UUID) -> ConversationORM
     session.flush()
     return conversation
 
+
 def _conversation_id_for(orm: TaskORM) -> str:
     task_input = orm.input or {}
     if task_input.get("conversation_id"):
@@ -188,12 +204,14 @@ def _conversation_id_for(orm: TaskORM) -> str:
         return DEFAULT_CONVERSATION_ID
     return str(task_input.get("conversation_id") or DEFAULT_CONVERSATION_ID)
 
+
 def _conversation_sandbox(conversation_id: str) -> ConversationSandbox:
     return ConversationSandbox(
         conversation_id=conversation_id,
         host_workspace=Path(HOST_WORKSPACE_ROOT) / "conversations" / conversation_id,
         config=config.sandbox,
     )
+
 
 def _conversation_tasks(
     session, conversation_id: str, ascending: bool = True
@@ -207,6 +225,7 @@ def _conversation_tasks(
         .order_by(order)
         .all()
     )
+
 
 async def _task_stream_progress(task: TaskORM) -> list[dict]:
     redis = aioredis.from_url(REDIS_URL, decode_responses=True)

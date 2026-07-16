@@ -13,6 +13,7 @@ class ExecutionPolicy(BaseModel):
     slice_steps: int = Field(ge=1)
     max_continuations: int = Field(ge=0)
     token_budget: int = Field(ge=1)
+    enforce_token_budget: bool = True
     max_wall_time_seconds: int = Field(ge=1)
     max_tool_calls: int = Field(ge=1)
     max_no_progress_cycles: int = Field(ge=1)
@@ -60,12 +61,17 @@ class ExecutionPolicy(BaseModel):
     def total_step_guard(self) -> int:
         return self.slice_steps * (self.max_continuations + 1)
 
+    def without_token_limit(self) -> "ExecutionPolicy":
+        """Keep token telemetry while disabling cumulative token termination."""
+        return self.model_copy(update={"enforce_token_budget": False})
+
     def public_summary(self) -> dict:
         return {
             "mode": self.mode,
             "slice_steps": self.slice_steps,
             "max_continuations": self.max_continuations,
             "token_budget": self.token_budget,
+            "token_budget_enforced": self.enforce_token_budget,
             "max_wall_time_seconds": self.max_wall_time_seconds,
             "max_tool_calls": self.max_tool_calls,
             "max_no_progress_cycles": self.max_no_progress_cycles,

@@ -269,6 +269,28 @@ class TestAgentLoopIntegration:
         assert "25,522 tokens left" in reason
         assert "51,151" in reason
 
+    def test_unmetered_local_policy_never_stops_on_cumulative_tokens(self, agent):
+        import time
+
+        from app.task_context import current_execution_usage
+
+        agent.execution_policy = (
+            ExecutionPolicy.for_mode("balanced")
+            .without_token_limit()
+            .model_copy(update={"max_wall_time_seconds": 10_000})
+        )
+        agent.total_steps = 10
+        agent.last_step_token_cost = 80_000
+        usage_token = current_execution_usage.set(
+            {"input": 500_000, "completion": 100_000, "total": 600_000}
+        )
+        try:
+            reason = agent._hard_budget_reason(time.monotonic())
+        finally:
+            current_execution_usage.reset(usage_token)
+
+        assert reason is None
+
     @pytest.mark.asyncio
     async def test_tool_retry_on_error(self, agent, task):
         """Test that execute_tool retries when a tool returns ToolResult.is_error."""

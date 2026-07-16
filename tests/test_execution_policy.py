@@ -19,3 +19,11 @@ def test_execution_profiles_scale_all_budget_dimensions():
 
 def test_unknown_execution_mode_falls_back_to_balanced():
     assert ExecutionPolicy.for_mode("unknown").mode == "balanced"
+
+
+def test_local_policy_keeps_token_telemetry_without_enforcing_limit():
+    policy = ExecutionPolicy.for_mode("balanced").without_token_limit()
+
+    assert policy.token_budget == 320_000
+    assert policy.enforce_token_budget is False
+    assert policy.public_summary()["token_budget_enforced"] is False

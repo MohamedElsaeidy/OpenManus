@@ -65,6 +65,11 @@ def resolve_execution_policy(connection: dict) -> tuple[ExecutionPolicy, str]:
     policy = ExecutionPolicy.for_mode(mode)
     source = "llm_connection" if connection.get("execution_mode") else "config"
 
+    api_type = str(connection.get("api_type") or "").strip().lower()
+    if api_type in {"lmstudio", "ollama"}:
+        policy = policy.without_token_limit()
+        source = f"{source}_local_unmetered"
+
     legacy_steps = connection.get("max_steps")
     if not connection.get("execution_mode") and legacy_steps not in (None, ""):
         try:

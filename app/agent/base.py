@@ -324,22 +324,26 @@ class BaseAgent(BaseModel, ABC):
     def _hard_budget_reason(self, started_at: float) -> Optional[str]:
         usage = get_current_token_usage()
         elapsed = time.monotonic() - started_at
-        if usage["total"] >= self.execution_policy.token_budget:
+        if (
+            self.execution_policy.enforce_token_budget
+            and usage["total"] >= self.execution_policy.token_budget
+        ):
             return (
                 f"Execution reached its {self.execution_policy.token_budget:,}-token "
                 "task budget."
             )
-        token_reserve = max(
-            self.execution_policy.step_token_reserve,
-            self.last_step_token_cost,
-        )
-        remaining_tokens = self.execution_policy.token_budget - usage["total"]
-        if self.total_steps > 0 and remaining_tokens <= token_reserve:
-            return (
-                f"Execution has {remaining_tokens:,} tokens left; the next step is "
-                f"projected to require at least {token_reserve:,}. Preserving the "
-                "remaining budget for compact finalization."
+        if self.execution_policy.enforce_token_budget:
+            token_reserve = max(
+                self.execution_policy.step_token_reserve,
+                self.last_step_token_cost,
             )
+            remaining_tokens = self.execution_policy.token_budget - usage["total"]
+            if self.total_steps > 0 and remaining_tokens <= token_reserve:
+                return (
+                    f"Execution has {remaining_tokens:,} tokens left; the next step is "
+                    f"projected to require at least {token_reserve:,}. Preserving the "
+                    "remaining budget for compact finalization."
+                )
         if self.tool_calls_used >= self.execution_policy.max_tool_calls:
             return (
                 f"Execution reached its {self.execution_policy.max_tool_calls} "

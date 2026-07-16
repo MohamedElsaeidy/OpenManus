@@ -90,6 +90,14 @@ class Manus(ToolCallAgent):
             self.system_prompt = f"{self.system_prompt}\n\n{rl_context}"
         if self.disabled_tools:
             self.available_tools = self.available_tools.without(self.disabled_tools)
+        planning_tool = self.available_tools.get_tool(PlanningTool().name)
+        if isinstance(planning_tool, PlanningTool):
+            try:
+                plan_context = planning_tool.active_plan_context()
+                if plan_context:
+                    self.system_prompt = f"{self.system_prompt}\n\n{plan_context}"
+            except Exception as exc:
+                logger.warning(f"Unable to load persisted planning context: {exc}")
         self.browser_context_helper = BrowserContextHelper(self)
         return self
 

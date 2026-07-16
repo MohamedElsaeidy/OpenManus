@@ -1,19 +1,17 @@
 import json
-from urllib import parse as urlparse
-from urllib import error as urlerror
-from urllib import request as urlrequest
 from typing import Any, Optional
-from fastapi import APIRouter, Request, HTTPException
+from urllib import error as urlerror
+from urllib import parse as urlparse
+from urllib import request as urlrequest
+
+from fastapi import APIRouter, HTTPException, Request
 
 from app.config import config
-from server.api.deps import (
-    registry,
-    _require_user,
-    _get_app_setting,
-    _set_app_setting,
-)
+from server.api.deps import _get_app_setting, _require_user, registry
+
 
 router = APIRouter(prefix="/api", tags=["models"])
+
 
 def _redact_config(value: Any) -> Any:
     secret_key_names = {
@@ -40,11 +38,13 @@ def _redact_config(value: Any) -> Any:
         return [_redact_config(item) for item in value]
     return value
 
+
 def _default_llm_connection() -> dict:
     default = config.llm.get("default")
     if default is None:
         return {}
     return _redact_config(default.model_dump(mode="json"))
+
 
 def _effective_llm_connection(session) -> dict:
     override = _get_app_setting(session, "llm_connection", {})
@@ -53,6 +53,7 @@ def _effective_llm_connection(session) -> dict:
     default = config.llm.get("default")
     return default.model_dump(mode="json") if default is not None else {}
 
+
 def _merge_conversation_llm_connection(session, settings: dict, incoming: dict) -> dict:
     existing = settings.get("llm_connection", {}) if isinstance(settings, dict) else {}
     return {
@@ -60,6 +61,7 @@ def _merge_conversation_llm_connection(session, settings: dict, incoming: dict) 
         **(existing if isinstance(existing, dict) else {}),
         **(incoming if isinstance(incoming, dict) else {}),
     }
+
 
 def _lmstudio_native_base(base_url: str) -> Optional[str]:
     try:
@@ -70,6 +72,7 @@ def _lmstudio_native_base(base_url: str) -> Optional[str]:
         return None
     root = f"{parsed.scheme}://{parsed.netloc}"
     return f"{root}/api/v1"
+
 
 def _lmstudio_api_request(
     method: str,
@@ -127,6 +130,7 @@ def _lmstudio_api_request(
         status_code=502, detail=f"LM Studio API request failed: {last_exc}"
     )
 
+
 def _http_json(
     method: str,
     url: str,
@@ -145,6 +149,7 @@ def _http_json(
             return {}
         return json.loads(data.decode("utf-8"))
 
+
 def _extract_model_rows(payload: Any) -> list[dict]:
     if isinstance(payload, list):
         return [item for item in payload if isinstance(item, dict)]
@@ -158,6 +163,7 @@ def _extract_model_rows(payload: Any) -> list[dict]:
         return [item for item in model_rows if isinstance(item, dict)]
     return []
 
+
 def _model_id_from_row(item: dict) -> str:
     return str(
         item.get("id")
@@ -167,6 +173,7 @@ def _model_id_from_row(item: dict) -> str:
         or item.get("instance_id")
         or ""
     ).strip()
+
 
 def _model_instance_id_from_row(item: dict) -> str:
     loaded_instances = item.get("loaded_instances")
@@ -178,6 +185,7 @@ def _model_instance_id_from_row(item: dict) -> str:
                 return instance_id
     return str(item.get("instance_id") or "").strip()
 
+
 def _model_state_from_row(item: dict) -> str:
     state = str(item.get("state") or "").strip().lower()
     if state:
@@ -186,6 +194,7 @@ def _model_state_from_row(item: dict) -> str:
     if isinstance(loaded_instances, list):
         return "loaded" if len(loaded_instances) > 0 else "not-loaded"
     return ""
+
 
 def _model_variant_tag_from_row(item: dict) -> str:
     quant = item.get("quantization")
@@ -200,6 +209,7 @@ def _model_variant_tag_from_row(item: dict) -> str:
     if fmt:
         return fmt
     return ""
+
 
 def _llm_connection_health(session) -> dict:
     connection = _effective_llm_connection(session)
@@ -236,6 +246,7 @@ def _llm_connection_health(session) -> dict:
         payload["live"] = False
         payload["reason"] = str(exc)
         return payload
+
 
 @router.get("/models")
 async def list_models(request: Request):
@@ -317,6 +328,7 @@ async def list_models(request: Request):
         seen.add(model["id"])
         unique_models.append(model)
     return {"models": unique_models}
+
 
 @router.post("/models/query")
 async def query_models(request: Request):
@@ -449,6 +461,7 @@ async def query_models(request: Request):
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Model query failed: {exc}")
 
+
 @router.post("/models/load")
 async def load_model(request: Request):
     _require_user(request)
@@ -503,6 +516,7 @@ async def load_model(request: Request):
         raise HTTPException(status_code=exc.code, detail=detail or f"HTTP {exc.code}")
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Load model failed: {exc}")
+
 
 @router.post("/models/eject")
 async def eject_model(request: Request):
@@ -657,6 +671,7 @@ async def eject_model(request: Request):
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"LM Studio eject failed: {exc}")
+
 
 @router.post("/connection/verify")
 async def verify_connection(request: Request):

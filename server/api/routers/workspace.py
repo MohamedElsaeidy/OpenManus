@@ -1,9 +1,12 @@
 import datetime
 import os
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
+
 router = APIRouter(prefix="/api/workspace", tags=["workspace"])
+
 
 @router.get("/{path:path}")
 async def get_workspace(path: str = ""):

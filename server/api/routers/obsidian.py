@@ -1,21 +1,24 @@
-import re
 import logging
-import uuid
+import re
 from pathlib import Path
-from fastapi import APIRouter, Request, HTTPException
-from server.models import ConversationORM, ObsidianNoteORM, ObsidianEdgeORM
+
+from fastapi import APIRouter, HTTPException, Request
+
 from server.api.deps import (
-    registry,
-    _require_user,
-    _require_conversation,
-    _now,
     WORKSPACE_ROOT,
+    _now,
+    _require_conversation,
+    _require_user,
+    registry,
 )
+from server.models import ConversationORM, ObsidianEdgeORM, ObsidianNoteORM
+
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/conversations", tags=["obsidian"])
 
 WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:[^\]]*)\]\]")
+
 
 def _extract_wikilinks(content: str) -> list[str]:
     if not content:
@@ -26,6 +29,7 @@ def _extract_wikilinks(content: str) -> list[str]:
         if normalized:
             out.append(normalized)
     return out
+
 
 def _obsidian_graph_payload(session, conversation: ConversationORM) -> dict:
     notes = (
@@ -63,6 +67,7 @@ def _obsidian_graph_payload(session, conversation: ConversationORM) -> dict:
         "node_count": len(node_payload),
         "edge_count": len(edge_payload),
     }
+
 
 @router.post("/{conversation_id}/obsidian/import")
 async def import_obsidian_context(request: Request, conversation_id: str):
@@ -200,6 +205,7 @@ async def import_obsidian_context(request: Request, conversation_id: str):
             "graph": payload,
         }
 
+
 @router.get("/{conversation_id}/obsidian/graph")
 async def get_obsidian_graph(request: Request, conversation_id: str):
     user = _require_user(request)
@@ -216,6 +222,7 @@ async def get_obsidian_graph(request: Request, conversation_id: str):
             "conversation_id": conversation_id,
             **_obsidian_graph_payload(session, conversation),
         }
+
 
 @router.get("/{conversation_id}/obsidian/context")
 async def get_obsidian_context(request: Request, conversation_id: str, limit: int = 8):

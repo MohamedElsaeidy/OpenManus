@@ -1,40 +1,38 @@
-import os
-import uuid
-import json
 import asyncio
+import json
+import uuid
 from typing import Optional
-from fastapi import APIRouter, Request, HTTPException, Form
-from sse_starlette.sse import EventSourceResponse
+
 import redis.asyncio as aioredis
+from fastapi import APIRouter, Form, HTTPException, Request
+from sse_starlette.sse import EventSourceResponse
 
 from core.task import TaskStatus
-from server.models import TaskORM, ConversationORM, ConversationEventORM
-from server.tasks import run_task
-from server.celery_app import celery_app
 from server.api.deps import (
-    registry,
-    _require_user,
-    _task_belongs_to_user,
-    _conversation_id_for,
-    _ensure_default_conversation,
-    _require_conversation,
-    _conversation_tasks,
-    _task_stream_progress,
-    _get_app_setting,
-    _set_app_setting,
-    _now,
-    TERMINAL_STATUSES,
     REDIS_URL,
-    DEFAULT_CONVERSATION_ID,
+    TERMINAL_STATUSES,
+    _conversation_id_for,
+    _conversation_tasks,
+    _ensure_default_conversation,
+    _now,
+    _require_conversation,
+    _require_user,
+    _set_app_setting,
+    _task_belongs_to_user,
+    registry,
 )
+from server.api.event_mapping import _agent_event_to_progress
 from server.api.routers.models_llm import (
     _effective_llm_connection,
     _merge_conversation_llm_connection,
 )
-from server.api.routers.conversations import _task_to_dict
-from server.api.event_mapping import _agent_event_to_progress
+from server.celery_app import celery_app
+from server.models import ConversationEventORM, ConversationORM, TaskORM
+from server.tasks import run_task
+
 
 router = APIRouter(prefix="", tags=["tasks"])
+
 
 def _task_input(
     prompt: Optional[str],
@@ -85,6 +83,7 @@ def _task_input(
         data["identity_notes"] = str(identity_notes).strip()
     return data
 
+
 @router.get("/api/tasks")
 async def list_tasks(request: Request, page: int = 1, pageSize: int = 30):
     user = _require_user(request)
@@ -120,6 +119,7 @@ async def list_tasks(request: Request, page: int = 1, pageSize: int = 30):
         ]
 
         return {"tasks": tasks, "total": len(tasks)}
+
 
 @router.get("/api/tasks/{task_id}/events")
 async def task_events(request: Request, task_id: str):
@@ -235,6 +235,7 @@ async def task_events(request: Request, task_id: str):
             await redis.aclose()
 
     return EventSourceResponse(event_generator())
+
 
 @router.post("/api/tasks")
 async def create_task(
@@ -461,6 +462,7 @@ async def create_task(
         },
     }
 
+
 @router.post("/api/tasks/{task_id}/message")
 async def send_task_message(request: Request, task_id: str):
     user = _require_user(request)
@@ -492,6 +494,7 @@ async def send_task_message(request: Request, task_id: str):
         await redis.aclose()
 
     return {"id": task_id, "queued": True}
+
 
 @router.post("/api/conversations/{conversation_id}/messages")
 async def send_conversation_message(request: Request, conversation_id: str):
@@ -607,6 +610,7 @@ async def send_conversation_message(request: Request, conversation_id: str):
         "created_task": True,
     }
 
+
 @router.get("/api/tasks/{task_id}")
 async def get_task(request: Request, task_id: str):
     user = _require_user(request)
@@ -620,6 +624,7 @@ async def get_task(request: Request, task_id: str):
             "result": orm.result,
             "conversation_id": _conversation_id_for(orm),
         }
+
 
 @router.post("/api/tasks/{task_id}/interrupt")
 @router.post("/api/tasks/{task_id}/terminate")
@@ -637,6 +642,7 @@ async def interrupt_task(request: Request, task_id: str):
     except Exception:
         pass
     return {"id": task_id, "status": TaskStatus.INTERRUPTED.value}
+
 
 @router.delete("/api/tasks/{task_id}")
 async def delete_task(request: Request, task_id: str):

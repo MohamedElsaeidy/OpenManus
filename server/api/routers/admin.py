@@ -1,31 +1,33 @@
+import asyncio
 import os
 import threading
-import asyncio
-from typing import Any, Optional
-from fastapi import APIRouter, Request, HTTPException
+
+from fastapi import APIRouter, HTTPException, Request
 
 from app.config import config
 from server.api.deps import (
-    registry,
-    _require_admin,
-    _get_app_setting,
-    _set_app_setting,
     AVAILABLE_TOOLS,
-    REDIS_URL,
-    WORKSPACE_ROOT,
-    SESSION_DAYS,
     DEFAULT_CONVERSATION_ID,
+    REDIS_URL,
+    SESSION_DAYS,
+    WORKSPACE_ROOT,
+    _get_app_setting,
+    _require_admin,
+    _set_app_setting,
+    registry,
 )
 from server.api.routers.models_llm import (
-    list_models,
-    _redact_config,
     _default_llm_connection,
     _effective_llm_connection,
+    _redact_config,
+    list_models,
 )
+
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 _calibration_status: dict = {}
+
 
 def _loaded_config_defaults() -> dict:
     data = config._config.model_dump(mode="json")
@@ -38,6 +40,7 @@ def _loaded_config_defaults() -> dict:
         "session_days": SESSION_DAYS,
     }
     return _redact_config(data)
+
 
 def _calibrate_model_sync(
     base_url: str,
@@ -86,6 +89,7 @@ def _calibrate_model_sync(
     )
     return result
 
+
 @router.get("/settings")
 async def get_admin_settings(request: Request):
     _require_admin(request)
@@ -100,6 +104,7 @@ async def get_admin_settings(request: Request):
             "available_tools": AVAILABLE_TOOLS,
             "models": (await list_models(request))["models"],
         }
+
 
 @router.put("/settings")
 async def update_admin_settings(request: Request):
@@ -179,6 +184,7 @@ async def update_admin_settings(request: Request):
             "config_overrides": _get_app_setting(session, "config_overrides", {}),
             "available_tools": AVAILABLE_TOOLS,
         }
+
 
 @router.post("/calibrate")
 async def start_calibration(request: Request):
@@ -284,6 +290,7 @@ async def start_calibration(request: Request):
 
     return {"status": "started", "message": "Calibration started in background"}
 
+
 @router.get("/calibrate/status")
 async def calibration_status(request: Request):
     """Return current calibration progress."""
@@ -295,6 +302,7 @@ async def calibration_status(request: Request):
         "progress": 0,
     }
 
+
 @router.get("/calibration-result")
 async def get_calibration_result(request: Request):
     """Return the last saved calibration result."""
@@ -302,6 +310,7 @@ async def get_calibration_result(request: Request):
     with registry.SessionLocal() as session:
         result = _get_app_setting(session, "calibration_result", None)
     return {"result": result}
+
 
 @router.post("/calibration/apply")
 async def apply_calibration_mode(request: Request):

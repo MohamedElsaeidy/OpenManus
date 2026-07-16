@@ -1,7 +1,9 @@
 import uvicorn
+
 from server.api.app import app
 from server.api.deps import registry
 from server.api.event_mapping import _agent_event_to_progress
+
 
 __all__ = ["app", "registry", "_agent_event_to_progress"]
 

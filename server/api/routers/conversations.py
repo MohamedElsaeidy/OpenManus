@@ -1,48 +1,44 @@
-import os
-import uuid
-import shutil
 import logging
-from pathlib import Path
-from typing import Optional, Any
-from datetime import datetime
-from fastapi import APIRouter, Request, HTTPException
+import os
+import shutil
+import uuid
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import func
 
 from app.config import config
 from app.memory.agentmemory import agentmemory
-from server.models import (
-    ConversationORM,
-    ConversationEventORM,
-    ObsidianNoteORM,
-    ObsidianEdgeORM,
-    TaskORM,
-)
 from server.api.deps import (
-    registry,
-    _require_user,
-    _require_conversation,
-    _get_app_setting,
-    _set_app_setting,
-    _ensure_default_conversation,
+    CONVERSATION_STATES,
+    REDIS_URL,
+    WORKSPACE_ROOT,
     _conversation_id_for,
     _conversation_sandbox,
     _conversation_tasks,
-    _task_stream_progress,
+    _ensure_default_conversation,
+    _get_app_setting,
     _now,
-    CONVERSATION_STATES,
-    TERMINAL_STATUSES,
-    WORKSPACE_ROOT,
-    REDIS_URL,
-)
-from server.api.routers.models_llm import (
-    _effective_llm_connection,
-    _merge_conversation_llm_connection,
-    _llm_connection_health,
+    _require_conversation,
+    _require_user,
+    _set_app_setting,
+    _task_stream_progress,
+    registry,
 )
 from server.api.event_mapping import _agent_event_to_progress
+from server.api.routers.models_llm import _llm_connection_health
+from server.models import (
+    ConversationEventORM,
+    ConversationORM,
+    ObsidianEdgeORM,
+    ObsidianNoteORM,
+    TaskORM,
+)
+
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
+
 
 def _conversation_to_dict(session, conversation: ConversationORM) -> dict:
     from sqlalchemy import desc
@@ -156,6 +152,7 @@ def _conversation_to_dict(session, conversation: ConversationORM) -> dict:
         else None,
     }
 
+
 def _task_to_dict(orm: TaskORM) -> dict:
     status = str(orm.status)
     return {
@@ -168,6 +165,7 @@ def _task_to_dict(orm: TaskORM) -> dict:
         "created_at": orm.created_at.isoformat() if orm.created_at else None,
         "request": (orm.input or {}).get("prompt", "Untitled task"),
     }
+
 
 def _event_row_to_progress(
     row: ConversationEventORM, task: Optional[TaskORM] = None
@@ -197,10 +195,12 @@ def _event_row_to_progress(
         )
     return output
 
+
 def _truncate_text(value: str, limit: int = 8000) -> str:
     if len(value) <= limit:
         return value
     return value[:limit] + f"\n...[truncated {len(value) - limit} chars]"
+
 
 def _compact_history_value(value, *, text_limit: int = 8000):
     if isinstance(value, str):
@@ -222,10 +222,12 @@ def _compact_history_value(value, *, text_limit: int = 8000):
         return compacted
     return value
 
+
 def _compact_history_event(event: dict) -> dict:
     compacted = dict(event)
     compacted["content"] = _compact_history_value(event.get("content") or {})
     return compacted
+
 
 def _obsidian_health(session, conversation_id: Optional[str] = None) -> dict:
     payload = {
@@ -251,6 +253,7 @@ def _obsidian_health(session, conversation_id: Optional[str] = None) -> dict:
         payload["live"] = False
         payload["reason"] = f"DB error: {exc}"
     return payload
+
 
 def _agentmemory_health(conversation_id: Optional[str] = None) -> dict:
     vec_health = agentmemory.get_vector_health()
@@ -289,6 +292,7 @@ def _agentmemory_health(conversation_id: Optional[str] = None) -> dict:
     payload.update(agentmemory.get_vector_health())
     return payload
 
+
 def _prune_orphan_conversation_sandboxes(session) -> int:
     try:
         import docker
@@ -308,6 +312,7 @@ def _prune_orphan_conversation_sandboxes(session) -> int:
         return removed
     except Exception:
         return 0
+
 
 @router.get("")
 async def list_conversations(request: Request):
@@ -335,6 +340,7 @@ async def list_conversations(request: Request):
             ]
         }
 
+
 @router.post("")
 async def create_conversation(request: Request):
     user = _require_user(request)
@@ -361,12 +367,14 @@ async def create_conversation(request: Request):
         session.refresh(conversation)
         return _conversation_to_dict(session, conversation)
 
+
 @router.get("/{conversation_id}")
 async def get_conversation(request: Request, conversation_id: str):
     user = _require_user(request)
     with registry.SessionLocal() as session:
         conversation = _require_conversation(session, user.user_id, conversation_id)
         return _conversation_to_dict(session, conversation)
+
 
 @router.get("/{conversation_id}/tasks")
 async def get_conversation_tasks(request: Request, conversation_id: str):
@@ -377,6 +385,7 @@ async def get_conversation_tasks(request: Request, conversation_id: str):
             session, str(conversation.conversation_id), ascending=True
         )
         return {"tasks": [_task_to_dict(task) for task in tasks]}
+
 
 @router.get("/{conversation_id}/events/history")
 async def get_conversation_event_history(
@@ -459,6 +468,7 @@ async def get_conversation_event_history(
         },
     }
 
+
 @router.get("/{conversation_id}/events/count")
 async def get_conversation_event_count(request: Request, conversation_id: str):
     user = _require_user(request)
@@ -480,6 +490,7 @@ async def get_conversation_event_count(request: Request, conversation_id: str):
             "total": sum(int(count) for _, count in counts),
             "by_type": {event_type: int(count) for event_type, count in counts},
         }
+
 
 @router.get("/{conversation_id}/runtime")
 async def get_conversation_runtime(request: Request, conversation_id: str):
@@ -534,6 +545,7 @@ async def get_conversation_runtime(request: Request, conversation_id: str):
         "agentmemory": _agentmemory_health(conversation_id),
     }
 
+
 @router.get("/{conversation_id}/state")
 async def get_conversation_state(request: Request, conversation_id: str):
     user = _require_user(request)
@@ -548,6 +560,7 @@ async def get_conversation_state(request: Request, conversation_id: str):
         "sandbox": sandbox_status,
     }
 
+
 @router.get("/{conversation_id}/integrations/health")
 async def get_conversation_integrations_health(request: Request, conversation_id: str):
     user = _require_user(request)
@@ -559,6 +572,7 @@ async def get_conversation_integrations_health(request: Request, conversation_id
             "obsidian": _obsidian_health(session, conversation_id),
             "llm_connection": _llm_connection_health(session),
         }
+
 
 @router.put("/{conversation_id}/settings")
 async def update_conversation_settings(request: Request, conversation_id: str):
@@ -624,6 +638,7 @@ async def update_conversation_settings(request: Request, conversation_id: str):
         session.commit()
         session.refresh(conversation)
         return _conversation_to_dict(session, conversation)
+
 
 @router.delete("/{conversation_id}")
 async def delete_conversation(request: Request, conversation_id: str):
