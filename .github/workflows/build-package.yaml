@@ -1,33 +1,155 @@
-name: Build and upload Python package
+name: Production Package
 
 on:
+  push:
+    branches: ['**']
   workflow_dispatch:
   release:
-    types: [created, published]
+    types: [published]
+
+permissions:
+  contents: read
 
 jobs:
-  deploy:
+  package:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build production frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Assemble production bundle
+        id: bundle
+        run: |
+          set -euo pipefail
+          short_sha="${GITHUB_SHA::7}"
+          build_date=$(date --utc +%Y%m%d)
+          package_name="openmanus-production-${build_date}-${short_sha}"
+          stage_dir="release/${package_name}"
+
+          mkdir -p "${stage_dir}"
+          git archive --format=tar HEAD | tar --extract --directory="${stage_dir}"
+          rm -rf \
+            "${stage_dir}/.github" \
+            "${stage_dir}/tests" \
+            "${stage_dir}/research" \
+            "${stage_dir}/.pre-commit-config.yaml"
+
+          rm -rf "${stage_dir}/frontend/dist"
+          cp -R frontend/dist "${stage_dir}/frontend/dist"
+
+          python - "${stage_dir}/BUILD_INFO.json" <<'PY'
+          import json
+          import os
+          import sys
+          from datetime import datetime, timezone
+
+          payload = {
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "commit": os.environ["GITHUB_SHA"],
+              "ref": os.environ["GITHUB_REF"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "built_at": datetime.now(timezone.utc).isoformat(),
+          }
+          with open(sys.argv[1], "w", encoding="utf-8") as handle:
+              json.dump(payload, handle, indent=2)
+              handle.write("\n")
+          PY
+
+          docker compose --file "${stage_dir}/docker-compose.yml" config --quiet
+
+          tar --create --gzip \
+            --file "release/${package_name}.tar.gz" \
+            --directory release "${package_name}"
+          sha256sum "release/${package_name}.tar.gz" \
+            > "release/${package_name}.tar.gz.sha256"
+
+          echo "package_name=${package_name}" >> "${GITHUB_OUTPUT}"
+          echo "archive=release/${package_name}.tar.gz" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload production package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.bundle.outputs.package_name }}
+          path: |
+            ${{ steps.bundle.outputs.archive }}
+            ${{ steps.bundle.outputs.archive }}.sha256
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Publish package summary
+        run: |
+          {
+            echo "## Production package"
+            echo
+            echo "Artifact: \`${{ steps.bundle.outputs.package_name }}\`"
+            echo "Commit: \`${GITHUB_SHA}\`"
+            echo "Retention: 30 days"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  publish-pypi:
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: 'pip'
-      - name: Install dependencies
+
+      - name: Install packaging tools
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install setuptools wheel twine
-      - name: Set package version
+          python -m pip install setuptools wheel twine
+
+      - name: Set package version from tag
         run: |
-          export VERSION="${GITHUB_REF#refs/tags/v}"
-          sed -i "s/version=.*/version=\"${VERSION}\",/" setup.py
-      - name: Build and publish
+          version="${GITHUB_REF_NAME#v}"
+          python - "${version}" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          version = sys.argv[1]
+          setup_path = Path("setup.py")
+          setup_text = setup_path.read_text(encoding="utf-8")
+          updated, replacements = re.subn(
+              r'version="[^"]+"',
+              f'version="{version}"',
+              setup_text,
+              count=1,
+          )
+          if replacements != 1:
+              raise SystemExit("Could not update package version in setup.py")
+          setup_path.write_text(updated, encoding="utf-8")
+          PY
+
+      - name: Build and publish to PyPI
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         run: |
           python setup.py bdist_wheel sdist
+          twine check dist/*
           twine upload dist/*

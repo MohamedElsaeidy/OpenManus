@@ -2,11 +2,16 @@ name: Pre-commit checks
 
 on:
   pull_request:
-    branches:
-      - '**'
+    branches: [main]
   push:
-    branches:
-      - '**'
+    branches: [main]
+
+concurrency:
+  group: pre-commit-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   pre-commit-check:
