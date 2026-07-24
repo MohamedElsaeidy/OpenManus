@@ -31,7 +31,7 @@ type ToolCallSummary = {
   };
 };
 
-const humanizeToolName = (name: string) => {
+const humanizeToolName = (name: string, completed = false) => {
   const labels: Record<string, string> = {
     apply_patch_editor: 'Editing files',
     ask_human: 'Waiting for input',
@@ -50,6 +50,24 @@ const humanizeToolName = (name: string) => {
     wait_for_user_input: 'Waiting for input',
     web_search: 'Searching the web',
   };
+  const completedLabels: Record<string, string> = {
+    apply_patch_editor: 'Edited files',
+    ask_human: 'Requested input',
+    bash: 'Ran a command',
+    browser_use: 'Used the browser',
+    codebase_overview: 'Mapped the codebase',
+    glob: 'Found files',
+    grep: 'Searched the codebase',
+    line_edit: 'Edited a file',
+    memory_recall: 'Checked memory',
+    memory_save: 'Saved context',
+    planning: 'Updated the plan',
+    python_execute: 'Ran Python',
+    read_files: 'Read files',
+    skill_playbook: 'Loaded guidance',
+    web_search: 'Searched the web',
+  };
+  if (completedLabels[name] && completed) return completedLabels[name];
   if (labels[name]) return labels[name];
   return name
     .replace(/[_-]+/g, ' ')
@@ -226,7 +244,7 @@ const StepMessage = ({ message }: { message: LifecycleStep }) => {
   const isRunning = !stepComplete && !stepError;
   const headline = toolCalls.length
     ? toolCalls.length === 1
-      ? humanizeToolName(toolCalls[0].function.name)
+      ? humanizeToolName(toolCalls[0].function.name, !isRunning)
       : `${toolCalls.length} actions`
     : isRunning
       ? 'Analyzing the request'
@@ -332,15 +350,24 @@ const LifecycleMessage = ({
     structuredFinalText ||
     (completionText && !/^Task (completed|already completed)\.?$/i.test(completionText) ? completionText : '') ||
     terminatedText ||
-    directResponse;
+    (!isRunning ? directResponse : '');
   const traceSteps = stepMessages.filter((step, index) => {
     const hasTools = getVisibleToolCalls(step).length > 0;
     const hasError = step.messages.some(item => item.type === 'agent:lifecycle:step:error');
-    return hasTools || hasError || (isRunning && index === stepMessages.length - 1 && !directResponse);
+    return hasTools || hasError || (isRunning && index === stepMessages.length - 1);
   });
   const toolCount = traceSteps.reduce((count, step) => count + getVisibleToolCalls(step).length, 0);
-  const latestTools = traceSteps.length ? getVisibleToolCalls(traceSteps[traceSteps.length - 1]) : [];
-  const currentActivity = latestTools.length ? humanizeToolName(latestTools[latestTools.length - 1].function.name) : 'Analyzing the request';
+  const latestStep = traceSteps[traceSteps.length - 1];
+  const latestTools = latestStep ? getVisibleToolCalls(latestStep) : [];
+  const latestStepFinished = Boolean(
+    latestStep?.messages.some(
+      item => item.type === 'agent:lifecycle:step:complete' || item.type === 'agent:lifecycle:step:error',
+    ),
+  );
+  const currentActivity =
+    latestTools.length && !latestStepFinished
+      ? humanizeToolName(latestTools[latestTools.length - 1].function.name)
+      : 'Thinking';
   const showActivity = traceSteps.length > 0;
 
   return (

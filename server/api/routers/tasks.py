@@ -1,6 +1,7 @@
 import asyncio
 import json
 import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 import redis.asyncio as aioredis
@@ -32,6 +33,17 @@ from server.tasks import run_task
 
 
 router = APIRouter(prefix="", tags=["tasks"])
+
+
+def _stream_created_at(stream_id: str) -> Optional[str]:
+    try:
+        stream_timestamp_ms = int(str(stream_id).split("-", 1)[0])
+        return datetime.fromtimestamp(
+            stream_timestamp_ms / 1000,
+            tz=timezone.utc,
+        ).isoformat()
+    except (TypeError, ValueError, OSError):
+        return None
 
 
 def _task_input(
@@ -214,14 +226,7 @@ async def task_events(request: Request, task_id: str):
                                 "id"
                             ] = f"{task_id}:{msg_id}:{progress_index}:{progress.get('name')}"
                             progress["task_id"] = task_id
-                            try:
-                                stream_timestamp_ms = int(str(msg_id).split("-", 1)[0])
-                                progress["created_at"] = datetime.fromtimestamp(
-                                    stream_timestamp_ms / 1000,
-                                    tz=timezone.utc,
-                                ).isoformat()
-                            except (TypeError, ValueError, OSError):
-                                progress["created_at"] = None
+                            progress["created_at"] = _stream_created_at(msg_id)
                             yield {"data": json.dumps(progress)}
                             if progress["name"] in (
                                 "agent:lifecycle:complete",

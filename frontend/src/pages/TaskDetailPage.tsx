@@ -53,11 +53,11 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
   const messagesRef = useRef<Message[]>([]);
 
   const { containerRef: messagesContainerRef, shouldAutoScroll, handleScroll, scrollToBottom } = useAutoScroll();
-  const visibleMessages = useMemo(() => {
-    if (historyWindow >= messages.length) return messages;
-    return messages.slice(messages.length - historyWindow);
-  }, [historyWindow, messages]);
-  const aggregatedMessages = useMemo(() => aggregateMessages(visibleMessages), [visibleMessages]);
+  const completeMessages = useMemo(() => aggregateMessages(messages), [messages]);
+  const aggregatedMessages = useMemo(() => {
+    if (historyWindow >= completeMessages.length) return completeMessages;
+    return completeMessages.slice(completeMessages.length - historyWindow);
+  }, [completeMessages, historyWindow]);
 
   useEffect(() => {
     shouldAutoScrollRef.current = shouldAutoScroll;
@@ -567,9 +567,9 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
               const el = messagesContainerRef.current;
               if (!el) return;
               // Lazy-reveal older history only when the user intentionally scrolls up.
-              if (el.scrollTop < 120 && historyWindow < messages.length) {
+              if (el.scrollTop < 120 && historyWindow < completeMessages.length) {
                 const prevHeight = el.scrollHeight;
-                setHistoryWindow(windowSize => Math.min(messages.length, windowSize + 80));
+                setHistoryWindow(windowSize => Math.min(completeMessages.length, windowSize + 80));
                 requestAnimationFrame(() => {
                   const target = messagesContainerRef.current;
                   if (!target) return;

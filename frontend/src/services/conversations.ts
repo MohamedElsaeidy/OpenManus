@@ -285,7 +285,9 @@ export async function getConversationHistoryAll(conversationId: string): Promise
     const data: ConversationHistory = await response.json();
     conversation = data.conversation;
     tasks = data.tasks || tasks;
-    events.push(...(data.events || []));
+    // Pages are returned newest-first, while each page is internally chronological.
+    // Prepend older pages so the merged history remains oldest-to-newest.
+    events.unshift(...(data.events || []));
     const pagination = data.pagination || {};
     if (!pagination.has_more || !pagination.next_before_event_id) {
       break;

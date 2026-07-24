@@ -237,6 +237,7 @@ export const VaultPanel = ({ conversationId }: { conversationId: string }) => {
   );
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const canvasContainerRef = useRef<HTMLDivElement>(null);
   const simRef = useRef<ReturnType<typeof initSimulation> | null>(null);
   const animRef = useRef<number>(0);
   const alphaRef = useRef(1);
@@ -318,32 +319,53 @@ export const VaultPanel = ({ conversationId }: { conversationId: string }) => {
     run();
   }, []);
 
-  // Set up resize observer to dynamically adjust canvas size
+  // Set up resize observer to dynamically adjust canvas size.
+  // Observe the container, not the canvas whose intrinsic dimensions we mutate.
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !graph || !graph.nodes.length) return;
+    const container = canvasContainerRef.current;
+    if (!canvas || !container || !graph || !graph.nodes.length) return;
+
+    simRef.current = null;
+    isAnimatingRef.current = false;
+    alphaRef.current = 1;
+    scaleRef.current = 1;
+    offsetRef.current = { x: 0, y: 0 };
+
+    const resizeAndDraw = (width: number, height: number) => {
+      if (width <= 1 || height <= 1) return;
+
+      const dpr = window.devicePixelRatio || 1;
+      const pixelWidth = Math.max(1, Math.round(width * dpr));
+      const pixelHeight = Math.max(1, Math.round(height * dpr));
+      if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
+      if (canvas.height !== pixelHeight) canvas.height = pixelHeight;
+
+      if (!simRef.current) {
+        simRef.current = initSimulation(graph, width, height);
+      }
+
+      alphaRef.current = Math.max(alphaRef.current, 0.05);
+      startAnimation();
+    };
 
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const { width, height } = entry.contentRect;
-        const dpr = window.devicePixelRatio || 1;
-        canvas.width = width * dpr;
-        canvas.height = height * dpr;
-
-        // Initialize simulation coordinates if not done yet
-        if (!simRef.current) {
-          simRef.current = initSimulation(graph, width, height);
-        }
-
-        alphaRef.current = Math.max(alphaRef.current, 0.05);
-        startAnimation();
+        resizeAndDraw(width, height);
       }
     });
 
-    observer.observe(canvas);
+    observer.observe(container);
+    const initialFrame = requestAnimationFrame(() => {
+      const rect = container.getBoundingClientRect();
+      resizeAndDraw(rect.width, rect.height);
+    });
     return () => {
       observer.disconnect();
+      cancelAnimationFrame(initialFrame);
       cancelAnimationFrame(animRef.current);
+      isAnimatingRef.current = false;
     };
   }, [graph, startAnimation]);
 
@@ -576,7 +598,7 @@ export const VaultPanel = ({ conversationId }: { conversationId: string }) => {
           ) : (
             <div className="flex h-full min-h-0 gap-3">
               {/* Canvas Container with floating controls */}
-              <div className="relative flex-1 min-w-0 h-full">
+              <div ref={canvasContainerRef} className="relative min-w-0 flex-1 h-full">
                 <canvas
                   ref={canvasRef}
                   onMouseDown={handleMouseDown}
