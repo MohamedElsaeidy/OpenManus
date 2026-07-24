@@ -5,15 +5,16 @@ with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 setup(
-    name="openmanus",
+    name="openmanusv2",
     version="0.1.0",
     author="mannaandpoem and OpenManus Team",
     author_email="mannaandpoem@gmail.com",
     description="A versatile agent that can solve various tasks using multiple tools",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/FoundationAgents/OpenManus",
+    url="https://github.com/MohamedElsaeidy/OpenManus",
     packages=find_packages(),
+    py_modules=["main"],
     install_requires=[
         "pydantic~=2.10.4",
         "openai>=1.58.1,<1.67.0",

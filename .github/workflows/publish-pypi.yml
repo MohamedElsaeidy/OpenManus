@@ -12,6 +12,12 @@ jobs:
     if: startsWith(github.event.release.tag_name, 'v')
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    environment:
+      name: pypi
+      url: https://pypi.org/project/openmanusv2/
+    permissions:
+      contents: read
+      id-token: write
 
     steps:
       - name: Checkout release tag
@@ -25,7 +31,7 @@ jobs:
       - name: Install packaging tools
         run: |
           python -m pip install --upgrade pip
-          python -m pip install setuptools wheel twine
+          python -m pip install build twine
 
       - name: Set package version from tag
         run: |
@@ -49,11 +55,10 @@ jobs:
           setup_path.write_text(updated, encoding="utf-8")
           PY
 
-      - name: Build and publish to PyPI
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+      - name: Build distributions
         run: |
-          python setup.py bdist_wheel sdist
+          python -m build
           twine check dist/*
-          twine upload dist/*
+
+      - name: Publish to PyPI with trusted publishing
+        uses: pypa/gh-action-pypi-publish@release/v1
