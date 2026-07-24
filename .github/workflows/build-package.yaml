@@ -4,8 +4,6 @@ on:
   push:
     branches: ['**']
   workflow_dispatch:
-  release:
-    types: [published]
 
 permissions:
   contents: read
@@ -14,6 +12,9 @@ jobs:
   package:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      package_name: ${{ steps.bundle.outputs.package_name }}
+      archive: ${{ steps.bundle.outputs.archive }}
 
     steps:
       - name: Checkout
@@ -104,52 +105,61 @@ jobs:
             echo "Retention: 30 days"
           } >> "${GITHUB_STEP_SUMMARY}"
 
-  publish-pypi:
-    if: github.event_name == 'release'
+  release:
+    if: github.ref == 'refs/heads/main'
+    needs: package
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
+    permissions:
+      contents: write
 
     steps:
-      - name: Checkout release tag
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Download production package
+        uses: actions/download-artifact@v4
         with:
-          python-version: '3.12'
+          name: ${{ needs.package.outputs.package_name }}
+          path: release
 
-      - name: Install packaging tools
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install setuptools wheel twine
-
-      - name: Set package version from tag
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-          python - "${version}" <<'PY'
-          import re
-          import sys
-          from pathlib import Path
-
-          version = sys.argv[1]
-          setup_path = Path("setup.py")
-          setup_text = setup_path.read_text(encoding="utf-8")
-          updated, replacements = re.subn(
-              r'version="[^"]+"',
-              f'version="{version}"',
-              setup_text,
-              count=1,
-          )
-          if replacements != 1:
-              raise SystemExit("Could not update package version in setup.py")
-          setup_path.write_text(updated, encoding="utf-8")
-          PY
-
-      - name: Build and publish to PyPI
+      - name: Publish GitHub production release
         env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_NAME: ${{ needs.package.outputs.package_name }}
         run: |
-          python setup.py bdist_wheel sdist
-          twine check dist/*
-          twine upload dist/*
+          set -euo pipefail
+          release_tag="production-${GITHUB_SHA::12}"
+          archive="release/${PACKAGE_NAME}.tar.gz"
+          checksum="${archive}.sha256"
+
+          test -f "${archive}"
+          test -f "${checksum}"
+
+          if gh release view "${release_tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${release_tag}" \
+              "${archive}#Production package" \
+              "${checksum}#SHA-256 checksum" \
+              --clobber \
+              --repo "${GITHUB_REPOSITORY}"
+          else
+            gh release create "${release_tag}" \
+              "${archive}#Production package" \
+              "${checksum}#SHA-256 checksum" \
+              --target "${GITHUB_SHA}" \
+              --title "Production build ${GITHUB_SHA::7}" \
+              --notes "Automated production package for commit ${GITHUB_SHA}." \
+              --repo "${GITHUB_REPOSITORY}"
+          fi
+
+          release_id=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/releases/tags/${release_tag}" \
+            --jq '.id')
+          gh api --method PATCH \
+            "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+            --raw-field make_latest=true \
+            >/dev/null
+
+          {
+            echo "## GitHub Release"
+            echo
+            echo "Release: \`${release_tag}\`"
+            echo "This release is visible in the repository Releases section."
+          } >> "${GITHUB_STEP_SUMMARY}"

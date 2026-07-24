@@ -1,0 +1,59 @@
+name: Publish PyPI Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: startsWith(github.event.release.tag_name, 'v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install packaging tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install setuptools wheel twine
+
+      - name: Set package version from tag
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          python - "${version}" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          version = sys.argv[1]
+          setup_path = Path("setup.py")
+          setup_text = setup_path.read_text(encoding="utf-8")
+          updated, replacements = re.subn(
+              r'version="[^"]+"',
+              f'version="{version}"',
+              setup_text,
+              count=1,
+          )
+          if replacements != 1:
+              raise SystemExit("Could not update package version in setup.py")
+          setup_path.write_text(updated, encoding="utf-8")
+          PY
+
+      - name: Build and publish to PyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          python setup.py bdist_wheel sdist
+          twine check dist/*
+          twine upload dist/*
