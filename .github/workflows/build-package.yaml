@@ -4,6 +4,13 @@ on:
   push:
     branches: ['**']
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing GitHub release tag to receive the package (optional)
+        required: false
+        type: string
+  release:
+    types: [published]
 
 permissions:
   contents: read
@@ -21,6 +28,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+          ref: ${{ inputs.release_tag || github.ref }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -106,7 +114,10 @@ jobs:
           } >> "${GITHUB_STEP_SUMMARY}"
 
   release:
-    if: github.ref == 'refs/heads/main'
+    if: >-
+      github.ref == 'refs/heads/main' ||
+      github.event_name == 'release' ||
+      inputs.release_tag != ''
     needs: package
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -124,9 +135,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PACKAGE_NAME: ${{ needs.package.outputs.package_name }}
+          RELEASE_EVENT_TAG: ${{ github.event.release.tag_name }}
+          REQUESTED_RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
-          release_tag="production-${GITHUB_SHA::12}"
+          release_tag="${REQUESTED_RELEASE_TAG:-${RELEASE_EVENT_TAG:-}}"
+          if [ -z "${release_tag}" ]; then
+            release_tag="production-${GITHUB_SHA::12}"
+          fi
           archive="release/${PACKAGE_NAME}.tar.gz"
           checksum="${archive}.sha256"
 
