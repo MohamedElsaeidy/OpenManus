@@ -9,6 +9,8 @@ import {
   Coins,
   FileDiff,
   LoaderCircle,
+  ShieldAlert,
+  ShieldCheck,
   Wrench,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
@@ -311,6 +313,13 @@ const LifecycleMessage = ({
         typeof item.content?.final_response === 'string' &&
         item.content.final_response.trim(),
     ) as Message | undefined;
+  const verificationMessage = [...message.messages]
+    .reverse()
+    .find(
+      item =>
+        item.type === 'agent:lifecycle:state:change' &&
+        item.content?.verification === true,
+    ) as Message | undefined;
   const stepMessages = message.messages.filter(
     (item): item is LifecycleStep => item.type === 'agent:lifecycle:step',
   );
@@ -413,6 +422,24 @@ const LifecycleMessage = ({
               Analyzing the request
             </div>
           ) : null}
+
+          {verificationMessage && (
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              {verificationMessage.content.verified === true ? (
+                <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" />
+              ) : (
+                <ShieldAlert className="h-3.5 w-3.5 text-amber-600" />
+              )}
+              <span>
+                {verificationMessage.content.verified === true
+                  ? 'Verified'
+                  : verificationMessage.content.verified === false
+                    ? 'Verification rejected'
+                    : 'Verification unconfirmed'}
+                {' · '}Trust {Math.round(Number(verificationMessage.content.trust_score || 0) * 100)}%
+              </span>
+            </div>
+          )}
 
           {completeMessage && (
             <CompletionMessage message={completeMessage} startedAt={startedAt} finishedAt={finishedAt} />

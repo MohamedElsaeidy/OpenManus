@@ -120,6 +120,19 @@ class ReActAgent(BaseAgent, ABC):
         )
         observation = await self.act(task)
 
+        if self.state == AgentState.FINISHED:
+            if self.phase != AgentPhase.DONE:
+                self._transition_phase(AgentPhase.DONE, task)
+            task.emit(
+                "agent:lifecycle:step:complete",
+                {
+                    "step": self.current_step,
+                    "outcome": "finished",
+                    "summary": observation[:400] if observation else "",
+                },
+            )
+            return observation
+
         # ── Observe ───────────────────────────────────────────────────────
         self._transition_phase(AgentPhase.OBSERVE, task)
         task.emit(

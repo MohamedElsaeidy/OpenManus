@@ -86,7 +86,7 @@ const useAgentTools = () => {
       }
       return {
         toolName: k.name,
-        functionName: key.includes(`${k.id}-`) ? key.replace(`${k.id}-` || '', '') : '',
+        functionName: key.includes(`${k.id}-`) ? key.replace(`${k.id}-`, '') : '',
       };
     },
     [allTools],

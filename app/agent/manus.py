@@ -9,6 +9,7 @@ from app.agent.toolcall import ToolCallAgent
 from app.config import config
 from app.logger import logger
 from app.prompt.manus import NEXT_STEP_PROMPT, SYSTEM_PROMPT
+from app.task_context import emit_current_task
 from app.tool import (
     ApplyPatchEditor,
     Bash,
@@ -126,6 +127,16 @@ class Manus(ToolCallAgent):
                         )
             except Exception as e:
                 logger.error(f"Failed to connect to MCP server '{server_id}': {e}")
+                emit_current_task(
+                    "mcp_server_health",
+                    {
+                        "server_id": server_id,
+                        "connection_type": server_config.type,
+                        "connected": False,
+                        "tool_count": 0,
+                        "reason": str(e),
+                    },
+                )
 
     async def connect_mcp_server(
         self,
@@ -149,6 +160,17 @@ class Manus(ToolCallAgent):
             tool for tool in self.mcp_clients.tools if tool.server_id == server_id
         ]
         self.available_tools.add_tools(*new_tools)
+        resolved_server_id = server_id or server_url
+        health = self.mcp_clients.health().get(resolved_server_id, {})
+        emit_current_task(
+            "mcp_server_health",
+            {
+                "server_id": resolved_server_id,
+                "connected": True,
+                "tool_count": health.get("tool_count", len(new_tools)),
+                "tools": health.get("tools", []),
+            },
+        )
 
     async def disconnect_mcp_server(self, server_id: str = "") -> None:
         """Disconnect from an MCP server and remove its tools."""

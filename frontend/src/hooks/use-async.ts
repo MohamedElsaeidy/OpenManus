@@ -4,16 +4,16 @@ import { create } from 'zustand';
 import { isEqual } from 'lodash';
 
 type CacheStore = {
-  caches: Map<boolean | string | symbol, any>;
+  caches: Map<boolean | string | symbol, unknown>;
   getCache: <R>(cacheKey: boolean | string | symbol) => R | undefined;
   setCache: <R>(cacheKey: boolean | string | symbol, data: R) => void;
 };
 
 const useCacheStore = create<CacheStore>((set, get) => ({
   caches: new Map(),
-  getCache: cacheKey => {
+  getCache: <R>(cacheKey: boolean | string | symbol) => {
     const { caches } = get();
-    return caches.get(cacheKey) || undefined;
+    return caches.get(cacheKey) as R | undefined;
   },
   setCache: (cacheKey, data) => {
     set(state => {
@@ -34,18 +34,14 @@ export const useAsync = <R, T extends unknown[]>(
   const [error, setError] = useState<Error | undefined>(undefined);
   const fnRef = useRef(fn);
   const paramsRef = useRef(params);
+  const depsRef = useRef<DependencyList>(options.deps ?? []);
   const { getCache, setCache } = useCacheStore();
 
   const cacheKey = options.cache || false;
-
-  useEffect(() => {
-    if (cacheKey && !options.manual) {
-      const cachedData = getCache<R>(cacheKey);
-      if (cachedData !== undefined) {
-        setData(cachedData);
-      }
-    }
-  }, [cacheKey, options.manual]);
+  if (!isEqual(depsRef.current, options.deps ?? [])) {
+    depsRef.current = options.deps ?? [];
+  }
+  const stableDeps = depsRef.current;
 
   // Update function reference without triggering re-renders
   useEffect(() => {
@@ -62,7 +58,7 @@ export const useAsync = <R, T extends unknown[]>(
   const shouldSkip = options.skip ? options.skip(params) : false;
   const run = useCallback(
     async (...runParams: T) => {
-      if (shouldSkip) {
+      if (stableDeps !== depsRef.current || shouldSkip) {
         return;
       }
 
@@ -83,7 +79,7 @@ export const useAsync = <R, T extends unknown[]>(
         setIsLoading(false);
       }
     },
-    [shouldSkip, cacheKey, ...(options.deps ?? [])],
+    [shouldSkip, cacheKey, setCache, stableDeps],
   );
 
   const refresh = useCallback(() => {
@@ -102,7 +98,7 @@ export const useAsync = <R, T extends unknown[]>(
 
       return newData;
     },
-    [data, cacheKey],
+    [data, cacheKey, setCache],
   );
 
   useEffect(() => {
@@ -118,7 +114,7 @@ export const useAsync = <R, T extends unknown[]>(
       }
     }
     run(...paramsRef.current);
-  }, [run, options.manual, cacheKey]);
+  }, [run, options.manual, cacheKey, getCache]);
 
   return { data, isLoading, error, run, refresh, mutate };
 };

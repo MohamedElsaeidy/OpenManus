@@ -167,6 +167,26 @@ def _agent_event_to_progress(event: dict) -> list[dict]:
     if agent_type == "token_count":
         return [_msg("agent:lifecycle:step:think:token:count", data)]
 
+    if agent_type == "verification_result":
+        verified = data.get("verified")
+        verification_state = (
+            "verification_passed"
+            if verified is True
+            else "verification_rejected"
+            if verified is False
+            else "verification_unconfirmed"
+        )
+        return [
+            _msg(
+                "agent:lifecycle:state:change",
+                {
+                    **data,
+                    "state": verification_state,
+                    "verification": True,
+                },
+            )
+        ]
+
     if agent_type in {
         "agent_configuration",
         "execution_policy",

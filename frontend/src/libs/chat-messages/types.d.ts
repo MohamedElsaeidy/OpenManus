@@ -69,6 +69,8 @@ type AggregatedMessageType =
  *   agent:act:complete
  * agent:step:complete
  */
+// Lifecycle payloads are an open JSON contract supplied by backend tools.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type Message<T = any> = {
   index?: number | string;
   task_id?: string;

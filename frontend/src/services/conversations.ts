@@ -152,6 +152,13 @@ export interface ObsidianGraph {
   }>;
 }
 
+export interface VaultAnswer {
+  conversation_id: string;
+  answer: string;
+  cited_notes: string[];
+  hops_used: number;
+}
+
 export interface IntegrationsHealth {
   conversation_id: string;
   agentmemory: {
@@ -182,6 +189,19 @@ export interface IntegrationsHealth {
     api_type?: string;
     base_url?: string;
     model_count?: number;
+  };
+  mcp?: {
+    configured: boolean;
+    live: boolean;
+    servers: Array<{
+      server_id: string;
+      connection_type: string;
+      configured: boolean;
+      connected: boolean;
+      tool_count: number;
+      tools: string[];
+      reason?: string | null;
+    }>;
   };
 }
 
@@ -358,6 +378,24 @@ export async function getObsidianGraph(conversationId: string): Promise<Obsidian
     credentials: 'same-origin',
   });
   if (!response.ok) throw new Error('Could not load vault graph');
+  return response.json();
+}
+
+export async function askObsidianVault(
+  conversationId: string,
+  question: string,
+  maxHops = 2,
+): Promise<VaultAnswer> {
+  const response = await fetch(`/api/conversations/${conversationId}/obsidian/ask`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question, max_hops: maxHops }),
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.detail || 'Could not query the vault');
+  }
   return response.json();
 }
 

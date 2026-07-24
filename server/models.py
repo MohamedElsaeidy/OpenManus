@@ -88,6 +88,35 @@ class ConversationEventORM(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 
+class TrustLedgerEntryORM(Base):
+    __tablename__ = "trust_ledger_entries"
+    __table_args__ = (
+        UniqueConstraint(
+            "conversation_id",
+            "prev_hash",
+            name="uq_trust_ledger_conv_prev_hash",
+        ),
+        UniqueConstraint(
+            "conversation_id",
+            "entry_hash",
+            name="uq_trust_ledger_conv_entry_hash",
+        ),
+    )
+
+    entry_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    conversation_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("conversations.conversation_id"),
+        nullable=False,
+        index=True,
+    )
+    agent_name = Column(String, nullable=False, index=True)
+    verdict = Column(JSONB, nullable=False)
+    timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
+    prev_hash = Column(String(64), nullable=False)
+    entry_hash = Column(String(64), nullable=False)
+
+
 class AppSettingORM(Base):
     __tablename__ = "app_settings"
 
@@ -164,6 +193,7 @@ __all__ = [
     "SessionORM",
     "ConversationORM",
     "ConversationEventORM",
+    "TrustLedgerEntryORM",
     "AppSettingORM",
     "ObsidianNoteORM",
     "ObsidianEdgeORM",

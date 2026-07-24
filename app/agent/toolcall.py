@@ -19,20 +19,30 @@ import difflib
 import json
 from typing import Any, List, Optional, Union
 
-from pydantic import Field
+from pydantic import Field, PrivateAttr
 
 from app.agent.base import Task, TaskInterrupted
 from app.agent.react import ReActAgent
+from app.agent.trust_ledger import TrustLedger, TrustLedgerEntry
 from app.config import config
 from app.exceptions import TokenLimitExceeded
 from app.llm import MULTIMODAL_MODELS
 from app.logger import logger
 from app.prompt.toolcall import NEXT_STEP_PROMPT, SYSTEM_PROMPT
-from app.schema import TOOL_CHOICE_TYPE, AgentState, Message, ToolCall, ToolChoice
+from app.schema import (
+    TOOL_CHOICE_TYPE,
+    AgentPhase,
+    AgentState,
+    Message,
+    ToolCall,
+    ToolChoice,
+    VerificationVerdict,
+)
 from app.task_context import (
     current_tool_call,
     get_current_auto_context_compress,
     get_current_requested_context_window,
+    get_current_trust_ledger,
 )
 from app.tool import CreateChatCompletion, Terminate, ToolCollection
 from app.tool.base import ToolResult
@@ -73,6 +83,7 @@ class ToolCallAgent(ReActAgent):
     _consecutive_observe_only_steps: int = 0
     _used_tools_this_run: bool = False
     _post_tool_text_misses: int = 0
+    _local_trust_ledger: TrustLedger = PrivateAttr(default_factory=TrustLedger)
 
     max_steps: int = config.agent.max_steps
     max_tools_per_step: int = config.agent.max_tools_per_step
@@ -849,20 +860,77 @@ class ToolCallAgent(ReActAgent):
         if not summary:
             summary = self._last_assistant_content.strip() or str(result).strip()
 
+        self._transition_phase(AgentPhase.VERIFY, task)
+        verdict = await self._verify_completion(
+            status=status,
+            summary=summary,
+            reason=reason,
+            result=result,
+        )
+        ledger = get_current_trust_ledger() or self._local_trust_ledger
+        entry = ledger.append(TrustLedgerEntry(agent_name=self.name, verdict=verdict))
+        trust_score = ledger.trust_score(self.name)
+        task.emit(
+            "verification_result",
+            {
+                "agent": self.name,
+                "verified": verdict.verified,
+                "reason": verdict.reason,
+                "evidence": verdict.evidence,
+                "trust_score": round(trust_score, 4),
+                "entry_hash": entry.entry_hash,
+                "prev_hash": entry.prev_hash,
+            },
+        )
+
         self.final_response = summary
         self.final_status = status
         self.final_reason = reason
+        if status == "success" and verdict.verified is False:
+            self.final_status = "failure"
+            self.final_reason = verdict.reason
 
         task.emit(
             "finish_signal",
             {
                 "tool": name,
                 "message": summary,
-                "reason": reason,
-                "status": status,
+                "reason": self.final_reason,
+                "status": self.final_status,
             },
         )
         self.state = AgentState.FINISHED
+
+    async def _verify_completion(
+        self,
+        *,
+        status: str,
+        summary: str,
+        reason: str,
+        result: Any,
+    ) -> VerificationVerdict:
+        if isinstance(result, ToolResult) and result.is_error:
+            return VerificationVerdict(
+                verified=False,
+                reason="The terminate tool returned an error.",
+                evidence=[str(result)],
+            )
+        if status != "success":
+            return VerificationVerdict(
+                verified=False,
+                reason=reason or "The agent reported unsuccessful completion.",
+                evidence=[f"terminate status={status}"],
+            )
+        if not summary.strip():
+            return VerificationVerdict(
+                verified=False,
+                reason="Completion was rejected because its summary was empty.",
+            )
+        return VerificationVerdict(
+            verified=True,
+            reason="Structured completion passed the verification gate.",
+            evidence=["terminate status=success", "non-empty completion summary"],
+        )
 
     @staticmethod
     def _should_finish_execution(name: str = "", result: Any = None, **kwargs) -> bool:

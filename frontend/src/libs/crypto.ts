@@ -125,7 +125,7 @@ export function decryptLongTextWithPrivateKey(encryptedData: string, privateKey:
       const decrypted = decryptWithAES(encrypted, aesKey, iv, authTag);
       return decrypted.toString('utf8');
     }
-  } catch (e) {
+  } catch {
     // if not new format, try old format
     console.warn('Long text decrypt is not supported, try old format');
     return decryptWithPrivateKey(encryptedData, privateKey);

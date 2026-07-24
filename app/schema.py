@@ -52,6 +52,14 @@ class AgentPhase(str, Enum):
     DONE = "DONE"
 
 
+class VerificationVerdict(BaseModel):
+    """Typed outcome produced by the completion verification gate."""
+
+    verified: Optional[bool] = None
+    reason: str
+    evidence: List[str] = Field(default_factory=list)
+
+
 class Function(BaseModel):
     name: str
     arguments: str

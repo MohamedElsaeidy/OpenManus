@@ -1,5 +1,4 @@
 import logging
-import re
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
@@ -12,23 +11,12 @@ from server.api.deps import (
     registry,
 )
 from server.models import ConversationORM, ObsidianEdgeORM, ObsidianNoteORM
+from server.obsidian_graph import desired_wikilink_edges
+from server.vault_rag import answer_from_vault
 
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/conversations", tags=["obsidian"])
-
-WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:[^\]]*)\]\]")
-
-
-def _extract_wikilinks(content: str) -> list[str]:
-    if not content:
-        return []
-    out: list[str] = []
-    for match in WIKILINK_RE.findall(content):
-        normalized = str(match).strip()
-        if normalized:
-            out.append(normalized)
-    return out
 
 
 def _obsidian_graph_payload(session, conversation: ConversationORM) -> dict:
@@ -119,50 +107,13 @@ async def import_obsidian_context(request: Request, conversation_id: str):
 
         session.flush()
 
-        # Rebuild note maps
         all_notes = (
             session.query(ObsidianNoteORM)
             .filter(ObsidianNoteORM.conversation_id == cid)
             .all()
         )
-        all_by_path = {note.path: note for note in all_notes}
-        all_by_path_stem: dict[str, list[ObsidianNoteORM]] = {}
-        for note in all_notes:
-            stem = note.path
-            if stem.endswith(".md"):
-                stem = stem[:-3]
-            all_by_path_stem.setdefault(stem, []).append(note)
-        all_by_basename: dict[str, list[ObsidianNoteORM]] = {}
-        for note in all_notes:
-            basename = Path(note.path).stem
-            all_by_basename.setdefault(basename, []).append(note)
-        all_by_title: dict[str, list[ObsidianNoteORM]] = {}
-        for note in all_notes:
-            all_by_title.setdefault(note.title, []).append(note)
-
         upserted_ids = {note.note_id for note in upserted}
-
-        desired_edges = set()
-        for note in upserted:
-            for target_name in _extract_wikilinks(note.content):
-                if not target_name:
-                    continue
-                target = None
-                stem_matches = all_by_path_stem.get(target_name, [])
-                if len(stem_matches) == 1:
-                    target = stem_matches[0]
-                elif target_name in all_by_path:
-                    target = all_by_path[target_name]
-                else:
-                    base_matches = all_by_basename.get(target_name, [])
-                    if len(base_matches) == 1:
-                        target = base_matches[0]
-                    else:
-                        title_matches = all_by_title.get(target_name, [])
-                        if len(title_matches) == 1:
-                            target = title_matches[0]
-                if target is not None and target.note_id != note.note_id:
-                    desired_edges.add((note.note_id, target.note_id, "wikilink"))
+        desired_edges = desired_wikilink_edges(upserted, all_notes)
 
         existing_edge_rows = (
             session.query(ObsidianEdgeORM)
@@ -222,6 +173,42 @@ async def get_obsidian_graph(request: Request, conversation_id: str):
             "conversation_id": conversation_id,
             **_obsidian_graph_payload(session, conversation),
         }
+
+
+@router.post("/{conversation_id}/obsidian/ask")
+async def ask_obsidian_vault(request: Request, conversation_id: str):
+    user = _require_user(request)
+    body = await request.json()
+    question = str(body.get("question") or "").strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="question is required")
+    if len(question) > 4000:
+        raise HTTPException(status_code=400, detail="question is too long")
+    try:
+        max_hops = int(body.get("max_hops", 2))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="max_hops must be an integer")
+
+    workspace_path = Path(WORKSPACE_ROOT) / "conversations" / str(conversation_id)
+    try:
+        from server.tasks import auto_sync_obsidian_notes
+
+        auto_sync_obsidian_notes(conversation_id, workspace_path)
+    except Exception as exc:
+        logger.warning(f"Failed to auto-sync obsidian notes before vault query: {exc}")
+
+    with registry.SessionLocal() as session:
+        _require_conversation(session, user.user_id, conversation_id)
+    try:
+        return {
+            "conversation_id": conversation_id,
+            **await answer_from_vault(conversation_id, question, max_hops=max_hops),
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.exception("Vault RAG query failed")
+        raise HTTPException(status_code=502, detail=f"Vault query failed: {exc}")
 
 
 @router.get("/{conversation_id}/obsidian/context")

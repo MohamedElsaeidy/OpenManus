@@ -53,8 +53,8 @@ export default function HomePage({ selectedModel }: { selectedModel?: string }) 
       await refreshTasks();
       await refreshConversations();
       navigate(`/conversations/${res.data.conversation_id || conversationId}`);
-    } catch (error: any) {
-      if (error.name === 'AbortError') return;
+    } catch (error: unknown) {
+      if (error instanceof Error && error.name === 'AbortError') return;
       console.error('Error:', error);
     } finally {
       setIsLoading(false);

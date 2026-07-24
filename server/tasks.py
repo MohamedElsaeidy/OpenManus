@@ -14,6 +14,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.agent.execution_policy import ExecutionPolicy
 from app.agent.manus import Manus
+from app.agent.trust_ledger import TrustLedger
 from app.config import config
 from app.memory.agentmemory import agentmemory
 from app.runtime_settings import get_disabled_tools, get_llm_connection
@@ -27,6 +28,7 @@ from app.task_context import (
     current_requested_context_window,
     current_sandbox,
     current_task,
+    current_trust_ledger,
     current_workspace,
 )
 from core.task import TaskStatus
@@ -38,7 +40,9 @@ from server.models import (
     ObsidianEdgeORM,
     ObsidianNoteORM,
     TaskORM,
+    TrustLedgerEntryORM,
 )
+from server.obsidian_graph import desired_wikilink_edges
 
 
 registry = TaskRegistry()
@@ -49,7 +53,6 @@ TASK_HARD_TIMEOUT_SECONDS = int(
     os.getenv("OPENMANUS_TASK_HARD_TIMEOUT_SECONDS", "1800")
 )
 _redis_client: Optional[redis_lib.Redis] = None
-WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:[^\]]*)\]\]")
 TAG_RE = re.compile(r"(^|\s)#([A-Za-z0-9_\-\/]+)")
 
 
@@ -811,24 +814,6 @@ def auto_sync_obsidian_notes(conversation_id: str, workspace_root: Path) -> None
             .filter(ObsidianNoteORM.conversation_id == cid)
             .all()
         )
-        all_by_path = {note.path: note for note in all_notes}
-        # Path-stem lookup: strip .md so [[projects/Overview]] matches "projects/Overview.md"
-        all_by_path_stem = {}
-        for note in all_notes:
-            stem = note.path
-            if stem.endswith(".md"):
-                stem = stem[:-3]
-            all_by_path_stem.setdefault(stem, []).append(note)
-        # Basename lookup: strip directories and .md so [[Overview]] matches "projects/Overview.md"
-        all_by_basename: dict[str, list[ObsidianNoteORM]] = {}
-        for note in all_notes:
-            basename = Path(note.path).stem
-            all_by_basename.setdefault(basename, []).append(note)
-        # Title lookup: track duplicates
-        all_by_title: dict[str, list[ObsidianNoteORM]] = {}
-        for note in all_notes:
-            all_by_title.setdefault(note.title, []).append(note)
-
         # Re-evaluate edges for all workspace-synced notes or touched notes to catch newly resolved targets
         source_notes = [
             note
@@ -838,32 +823,7 @@ def auto_sync_obsidian_notes(conversation_id: str, workspace_root: Path) -> None
         ]
         source_note_ids = {note.note_id for note in source_notes}
 
-        # Compute desired edges from source notes
-        desired_edges: set[tuple] = set()
-        for note in source_notes:
-            content = note.content or ""
-            for link in WIKILINK_RE.findall(content):
-                target_name = str(link).strip()
-                if not target_name:
-                    continue
-                # Resolution order: path-stem > basename > exact path > unambiguous title
-                target = None
-                stem_matches = all_by_path_stem.get(target_name, [])
-                if len(stem_matches) == 1:
-                    target = stem_matches[0]
-                elif target_name in all_by_path:
-                    target = all_by_path[target_name]
-                else:
-                    base_matches = all_by_basename.get(target_name, [])
-                    if len(base_matches) == 1:
-                        target = base_matches[0]
-                    else:
-                        title_matches = all_by_title.get(target_name, [])
-                        if len(title_matches) == 1:
-                            target = title_matches[0]
-                        # else: ambiguous or not found — skip
-                if target is not None and target.note_id != note.note_id:
-                    desired_edges.add((note.note_id, target.note_id, "wikilink"))
+        desired_edges = desired_wikilink_edges(source_notes, all_notes)
 
         # Query existing edges sourced from source notes only
         existing_edge_rows = (
@@ -966,6 +926,17 @@ def run_task(task_id: str, prompt: Optional[str] = None):
         execution_usage_token = current_execution_usage.set(
             {"input": 0, "completion": 0, "total": 0}
         )
+        try:
+            trust_conversation_id = uuid.UUID(str(conversation_id))
+        except ValueError:
+            trust_ledger = TrustLedger()
+        else:
+            trust_ledger = TrustLedger(
+                conversation_id=trust_conversation_id,
+                session_factory=registry.SessionLocal,
+                orm_model=TrustLedgerEntryORM,
+            )
+        trust_ledger_token = current_trust_ledger.set(trust_ledger)
         if config.sandbox.use_sandbox:
             sandbox = await ConversationSandbox(
                 conversation_id=conversation_id,
@@ -1074,6 +1045,7 @@ def run_task(task_id: str, prompt: Optional[str] = None):
             current_auto_context_compress.reset(auto_context_compress_token)
             current_llm_connection.reset(llm_connection_token)
             current_execution_usage.reset(execution_usage_token)
+            current_trust_ledger.reset(trust_ledger_token)
             os.chdir(previous_cwd)
 
     try:

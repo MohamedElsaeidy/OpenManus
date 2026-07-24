@@ -6,7 +6,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="openmanusv2",
-    version="0.1.0",
+    version="2.2.0",
     author="mannaandpoem and OpenManus Team",
     author_email="mannaandpoem@gmail.com",
     description="A versatile agent that can solve various tasks using multiple tools",

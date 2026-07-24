@@ -88,6 +88,48 @@ def _ensure_schema_updates() -> None:
                 )
             )
 
+        trust_chain_constraint = connection.execute(
+            text(
+                "SELECT 1 FROM information_schema.table_constraints "
+                "WHERE table_schema=current_schema() "
+                "AND table_name='trust_ledger_entries' "
+                "AND constraint_name='uq_trust_ledger_conv_prev_hash'"
+            )
+        ).fetchone()
+        if not trust_chain_constraint:
+            connection.execute(
+                text(
+                    "ALTER TABLE trust_ledger_entries ADD CONSTRAINT "
+                    "uq_trust_ledger_conv_prev_hash UNIQUE (conversation_id, prev_hash)"
+                )
+            )
+
+        # Older installs created a global entry_hash uniqueness constraint. Hashes
+        # are only chain identifiers within one conversation, so migrate it to the
+        # same conversation scope as the fork guard.
+        connection.execute(
+            text(
+                "ALTER TABLE trust_ledger_entries DROP CONSTRAINT IF EXISTS "
+                "trust_ledger_entries_entry_hash_key"
+            )
+        )
+        trust_entry_constraint = connection.execute(
+            text(
+                "SELECT 1 FROM information_schema.table_constraints "
+                "WHERE table_schema=current_schema() "
+                "AND table_name='trust_ledger_entries' "
+                "AND constraint_name='uq_trust_ledger_conv_entry_hash'"
+            )
+        ).fetchone()
+        if not trust_entry_constraint:
+            connection.execute(
+                text(
+                    "ALTER TABLE trust_ledger_entries ADD CONSTRAINT "
+                    "uq_trust_ledger_conv_entry_hash "
+                    "UNIQUE (conversation_id, entry_hash)"
+                )
+            )
+
 
 # Run schema migrations
 _ensure_schema_updates()

@@ -153,6 +153,48 @@ def _conversation_to_dict(session, conversation: ConversationORM) -> dict:
     }
 
 
+def _mcp_health(session, conversation_id: str) -> dict:
+    from sqlalchemy import desc
+
+    configured = config.mcp_config.servers
+    latest_by_server: dict[str, dict] = {}
+    rows = (
+        session.query(ConversationEventORM)
+        .filter(
+            ConversationEventORM.conversation_id == uuid.UUID(str(conversation_id)),
+            ConversationEventORM.event_type == "mcp_server_health",
+        )
+        .order_by(desc(ConversationEventORM.event_id))
+        .all()
+    )
+    for row in rows:
+        payload = dict(row.payload or {})
+        server_id = str(payload.get("server_id") or "")
+        if server_id and server_id not in latest_by_server:
+            latest_by_server[server_id] = payload
+
+    servers = []
+    for server_id, server_config in configured.items():
+        status = latest_by_server.get(server_id, {})
+        servers.append(
+            {
+                "server_id": server_id,
+                "connection_type": server_config.type,
+                "configured": True,
+                "connected": bool(status.get("connected", False)),
+                "tool_count": int(status.get("tool_count") or 0),
+                "tools": status.get("tools") or [],
+                "reason": status.get("reason")
+                or (None if status.get("connected") else "No connection recorded"),
+            }
+        )
+    return {
+        "configured": bool(configured),
+        "live": any(server["connected"] for server in servers),
+        "servers": servers,
+    }
+
+
 def _task_to_dict(orm: TaskORM) -> dict:
     status = str(orm.status)
     return {
@@ -572,6 +614,7 @@ async def get_conversation_integrations_health(request: Request, conversation_id
             "agentmemory": _agentmemory_health(conversation_id),
             "obsidian": _obsidian_health(session, conversation_id),
             "llm_connection": _llm_connection_health(session),
+            "mcp": _mcp_health(session, conversation_id),
         }
 
 

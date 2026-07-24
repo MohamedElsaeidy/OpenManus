@@ -70,8 +70,11 @@ class MCPAgent(ToolCallAgent):
         # Set available_tools to our MCP instance
         self.available_tools = self.mcp_clients
 
-        # Store initial tool schemas
-        await self._refresh_tools()
+        # Tool discovery already ran once while connecting; seed the schema cache
+        # from those proxies rather than querying the server a second time.
+        self.tool_schemas = {
+            tool.original_name: tool.parameters for tool in self.mcp_clients.tools
+        }
 
         # Add system message about available tools
         tool_names = list(self.mcp_clients.tool_map.keys())
@@ -84,7 +87,9 @@ class MCPAgent(ToolCallAgent):
             )
         )
 
-    async def _refresh_tools(self, task: Task) -> Tuple[List[str], List[str]]:
+    async def _refresh_tools(
+        self, task: Optional[Task] = None
+    ) -> Tuple[List[str], List[str]]:
         """Refresh the list of available tools from the MCP server.
 
         Returns:
@@ -94,7 +99,7 @@ class MCPAgent(ToolCallAgent):
             return [], []
 
         # Get current tool schemas directly from the server
-        response = await self.mcp_clients.list_tools()
+        response = await self.mcp_clients.refresh_tools()
         current_tools = {tool.name: tool.inputSchema for tool in response.tools}
 
         # Determine added, removed, and changed tools
@@ -113,19 +118,19 @@ class MCPAgent(ToolCallAgent):
         # Update stored schemas
         self.tool_schemas = current_tools
 
-        if added_tools:
+        if added_tools and task is not None:
             task.emit("tools_added", {"tools": added_tools})
             self.memory.add_message(
                 Message.system_message(f"New tools available: {', '.join(added_tools)}")
             )
-        if removed_tools:
+        if removed_tools and task is not None:
             task.emit("tools_removed", {"tools": removed_tools})
             self.memory.add_message(
                 Message.system_message(
                     f"Tools no longer available: {', '.join(removed_tools)}"
                 )
             )
-        if changed_tools:
+        if changed_tools and task is not None:
             task.emit("tools_changed", {"tools": changed_tools})
 
         return added_tools, removed_tools

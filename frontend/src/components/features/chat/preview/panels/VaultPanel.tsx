@@ -7,11 +7,18 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAsync } from '@/hooks/use-async';
-import { getObsidianGraph, importObsidianNotes, type ObsidianGraph } from '@/services/conversations';
+import {
+  askObsidianVault,
+  getObsidianGraph,
+  importObsidianNotes,
+  type ObsidianGraph,
+  type VaultAnswer,
+} from '@/services/conversations';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Maximize2, Minus, Plus } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { LoaderCircle, Maximize2, Minus, Plus, Send } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -145,10 +152,12 @@ const NODE_COLORS = {
   autoSync: '#22d3ee',    // cyan
   imported: '#a78bfa',    // violet
   selected: '#f59e0b',    // amber
+  cited: '#10b981',       // emerald
 };
 
-function nodeColor(node: SimNode, selectedId: string | null): string {
+function nodeColor(node: SimNode, selectedId: string | null, citedIds: Set<string>): string {
   if (node.id === selectedId) return NODE_COLORS.selected;
+  if (citedIds.has(node.id)) return NODE_COLORS.cited;
   if (node.path.includes('workspace-auto-sync') || (node.tags && node.tags.includes('sync'))) return NODE_COLORS.autoSync;
   return NODE_COLORS.imported;
 }
@@ -168,6 +177,7 @@ function drawGraph(
   edges: SimEdge[],
   nodeMap: Map<string, SimNode>,
   selectedId: string | null,
+  citedIds: Set<string>,
   width: number,
   height: number,
   dpr: number,
@@ -199,10 +209,10 @@ function drawGraph(
   // Nodes
   for (const node of nodes) {
     const r = nodeRadius(node);
-    const color = nodeColor(node, selectedId);
+    const color = nodeColor(node, selectedId, citedIds);
 
-    // Glow for selected
-    if (node.id === selectedId) {
+    // Glow for selected and cited nodes
+    if (node.id === selectedId || citedIds.has(node.id)) {
       ctx.shadowColor = color;
       ctx.shadowBlur = 12;
     }
@@ -211,6 +221,12 @@ function drawGraph(
     ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
     ctx.fillStyle = color;
     ctx.fill();
+
+    if (citedIds.has(node.id)) {
+      ctx.strokeStyle = NODE_COLORS.cited;
+      ctx.lineWidth = 2 / scale;
+      ctx.stroke();
+    }
 
     ctx.shadowColor = 'transparent';
     ctx.shadowBlur = 0;
@@ -251,7 +267,12 @@ export const VaultPanel = ({ conversationId }: { conversationId: string }) => {
 
   const [selectedNode, setSelectedNode] = useState<SimNode | null>(null);
   const selectedNodeRef = useRef<string | null>(null);
+  const citedNodeIdsRef = useRef<Set<string>>(new Set());
   const [importing, setImporting] = useState(false);
+  const [question, setQuestion] = useState('');
+  const [asking, setAsking] = useState(false);
+  const [vaultAnswer, setVaultAnswer] = useState<VaultAnswer | null>(null);
+  const [askError, setAskError] = useState<string | null>(null);
 
   const lastSync = graph?.nodes
     ?.map(n => n.updated_at)
@@ -300,6 +321,7 @@ export const VaultPanel = ({ conversationId }: { conversationId: string }) => {
           simRef.current.edges,
           simRef.current.nodeMap,
           selectedNodeRef.current,
+          citedNodeIdsRef.current,
           w,
           h,
           dpr,
@@ -540,6 +562,27 @@ export const VaultPanel = ({ conversationId }: { conversationId: string }) => {
     input.click();
   }, [conversationId, refresh]);
 
+  const handleAskVault = useCallback(async (event: React.FormEvent) => {
+    event.preventDefault();
+    const normalizedQuestion = question.trim();
+    if (!normalizedQuestion || asking) return;
+    setAsking(true);
+    setAskError(null);
+    try {
+      const result = await askObsidianVault(conversationId, normalizedQuestion);
+      citedNodeIdsRef.current = new Set(result.cited_notes);
+      setVaultAnswer(result);
+      startAnimation();
+    } catch (error) {
+      citedNodeIdsRef.current = new Set();
+      setVaultAnswer(null);
+      setAskError(error instanceof Error ? error.message : 'Could not query the vault');
+      startAnimation();
+    } finally {
+      setAsking(false);
+    }
+  }, [asking, conversationId, question, startAnimation]);
+
   // Compute connected nodes for selected sidebar details
   const connectedIds = new Set<string>();
   if (selectedNode && graph) {
@@ -574,6 +617,34 @@ export const VaultPanel = ({ conversationId }: { conversationId: string }) => {
           {importing ? 'Importing…' : 'Import Vault'}
         </button>
       </div>
+
+      <form onSubmit={handleAskVault} className="flex items-center gap-2">
+        <Input
+          value={question}
+          onChange={event => setQuestion(event.target.value)}
+          placeholder="Ask the vault"
+          aria-label="Ask the vault"
+          disabled={asking || !graph?.nodes.length}
+        />
+        <Button
+          type="submit"
+          size="icon"
+          variant="outline"
+          disabled={asking || !question.trim() || !graph?.nodes.length}
+          title="Ask the vault"
+        >
+          {asking ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+        </Button>
+      </form>
+      {askError && <div className="text-destructive text-xs">{askError}</div>}
+      {vaultAnswer && (
+        <div className="max-h-28 overflow-auto border-l-2 border-emerald-500/60 pl-3 text-sm">
+          <p className="whitespace-pre-wrap">{vaultAnswer.answer}</p>
+          <span className="text-muted-foreground mt-1 block text-xs">
+            {vaultAnswer.cited_notes.length} cited note{vaultAnswer.cited_notes.length === 1 ? '' : 's'} · {vaultAnswer.hops_used} hop{vaultAnswer.hops_used === 1 ? '' : 's'}
+          </span>
+        </div>
+      )}
 
       {/* Main content */}
       <Card className="flex min-h-0 flex-1 flex-col overflow-hidden">

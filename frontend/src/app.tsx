@@ -295,7 +295,7 @@ function App() {
         const backendModel = adminSettings?.llm_connection?.model;
         fetchModelsForProfile(activeProfile).then(items => {
           setModels(items);
-          const initial = backendModel || selectedModel || activeProfile.defaultModel;
+          const initial = backendModel || localStorage.getItem(STORAGE.selectedModel) || activeProfile.defaultModel;
           if (initial && items.some(model => model.id === initial)) {
             setSelectedModel(initial);
             localStorage.setItem(STORAGE.selectedModel, initial);

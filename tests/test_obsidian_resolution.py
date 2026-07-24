@@ -5,16 +5,7 @@ These reproduce the exact bugs reported and verify the fixes:
 2. Duplicate titles are detected and ambiguous links are skipped.
 3. Diff-based edge updates preserve edges from untouched notes.
 """
-import re
-from collections import defaultdict
-
-
-# --------------------------------------------------------------------------
-# Inline the resolution logic from the fixed code for unit testing
-# without requiring a database connection.
-# --------------------------------------------------------------------------
-
-WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:[^\]]*)\]\]")
+from server.obsidian_graph import WIKILINK_RE, desired_wikilink_edges, resolve_wikilink
 
 
 class FakeNote:
@@ -27,59 +18,11 @@ class FakeNote:
         self.content = content
 
 
-def resolve_wikilink(target_name: str, all_notes: list[FakeNote]) -> FakeNote | None:
-    """Replicate the fixed resolution logic from auto_sync_obsidian_notes."""
-    from pathlib import Path
-
-    # Build lookup dicts
-    all_by_path = {note.path: note for note in all_notes}
-
-    all_by_path_stem: dict[str, list[FakeNote]] = defaultdict(list)
-    for note in all_notes:
-        stem = note.path
-        if stem.endswith(".md"):
-            stem = stem[:-3]
-        all_by_path_stem[stem].append(note)
-
-    all_by_basename: dict[str, list[FakeNote]] = defaultdict(list)
-    for note in all_notes:
-        basename = Path(note.path).stem
-        all_by_basename[basename].append(note)
-
-    all_by_title: dict[str, list[FakeNote]] = defaultdict(list)
-    for note in all_notes:
-        all_by_title[note.title].append(note)
-
-    # Resolution order: path-stem > basename > exact path > unambiguous title
-    stem_matches = all_by_path_stem.get(target_name, [])
-    if len(stem_matches) == 1:
-        return stem_matches[0]
-    if target_name in all_by_path:
-        return all_by_path[target_name]
-    base_matches = all_by_basename.get(target_name, [])
-    if len(base_matches) == 1:
-        return base_matches[0]
-    title_matches = all_by_title.get(target_name, [])
-    if len(title_matches) == 1:
-        return title_matches[0]
-    return None
-
-
 def compute_edges(
     source_notes: list[FakeNote],
     all_notes: list[FakeNote],
 ) -> set[tuple[str, str, str]]:
-    """Replicate the diff-based edge computation."""
-    edges: set[tuple[str, str, str]] = set()
-    for note in source_notes:
-        for link in WIKILINK_RE.findall(note.content):
-            target_name = link.strip()
-            if not target_name:
-                continue
-            target = resolve_wikilink(target_name, all_notes)
-            if target is not None and target.note_id != note.note_id:
-                edges.add((note.note_id, target.note_id, "wikilink"))
-    return edges
+    return desired_wikilink_edges(source_notes, all_notes)
 
 
 # --------------------------------------------------------------------------

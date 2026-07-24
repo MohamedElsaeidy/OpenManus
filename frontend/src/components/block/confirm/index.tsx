@@ -81,7 +81,7 @@ const ConfirmDialog = () => {
 
 ConfirmDialog.displayName = 'ConfirmDialog';
 
-function confirm<F extends FieldValues = FieldValues, R = any>(props: {
+function confirm<F extends FieldValues = FieldValues, R = unknown>(props: {
   content: React.ReactNode | ((props: { form?: UseFormReturn<F> }) => React.ReactNode);
   className?: string;
   buttonText?: { cancel?: string; confirm?: string; loading?: string };
@@ -108,26 +108,27 @@ function confirm<F extends FieldValues = FieldValues, R = any>(props: {
   setOpen(true);
 }
 
-export async function asyncConfirm<F extends FieldValues = FieldValues, R = any>(props: {
+export async function asyncConfirm<F extends FieldValues = FieldValues, R = void>(props: {
   content: React.ReactNode | ((props: { form?: UseFormReturn<F> }) => React.ReactNode);
   buttonText?: { cancel?: string; confirm?: string };
   operations?: (props: { setOpen: (value: boolean) => void }) => React.ReactNode[];
   onConfirm?: (formData?: F) => R | Promise<R>;
   form?: UseFormReturn<F>;
 }) {
-  const promise = new Promise<R>(resolve => {
-    confirm<F>({
+  const promise = new Promise<R | undefined>(resolve => {
+    confirm<F, R | undefined>({
       content: props.content,
       buttonText: props.buttonText,
       operations: props.operations,
       form: props.form,
       onConfirm: async (formData?: F) => {
         if (!props.onConfirm) {
-          resolve(undefined as any);
-          return;
+          resolve(undefined);
+          return undefined;
         }
-        const res = await props.onConfirm(formData as any);
+        const res = await props.onConfirm(formData);
         resolve(res);
+        return res;
       },
     });
   });

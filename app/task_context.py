@@ -23,10 +23,17 @@ current_auto_context_compress: ContextVar[bool] = ContextVar(
 current_execution_usage: ContextVar[Optional[dict[str, int]]] = ContextVar(
     "current_execution_usage", default=None
 )
+current_trust_ledger: ContextVar[Optional[Any]] = ContextVar(
+    "current_trust_ledger", default=None
+)
 
 
 def get_current_task() -> Optional[Any]:
     return current_task.get()
+
+
+def get_current_trust_ledger() -> Optional[Any]:
+    return current_trust_ledger.get()
 
 
 def emit_current_task(event_type: str, data: dict) -> None:

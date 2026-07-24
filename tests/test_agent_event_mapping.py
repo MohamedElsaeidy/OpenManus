@@ -82,3 +82,16 @@ def test_browser_event_preserves_backend_and_extraction_metadata():
     assert progress[0]["name"] == ("agent:lifecycle:step:think:browser:browse:complete")
     assert progress[0]["content"]["browser_backend"] == "cloakbrowser"
     assert progress[0]["content"]["extraction_method"] == "dom_text_fallback"
+
+
+def test_verification_result_is_visible_as_state_change():
+    progress = _agent_event_to_progress(
+        {
+            "type": "verification_result",
+            "data": {"verified": True, "trust_score": 0.72},
+        }
+    )
+
+    assert progress[0]["name"] == "agent:lifecycle:state:change"
+    assert progress[0]["content"]["state"] == "verification_passed"
+    assert progress[0]["content"]["verification"] is True

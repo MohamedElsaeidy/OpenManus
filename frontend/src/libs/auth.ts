@@ -37,7 +37,7 @@ export async function verifyToken(token: string): Promise<AuthUser> {
       name: payload.name,
       isFirstLogin: payload.isFirstLogin,
     };
-  } catch (error) {
+  } catch {
     throw new Error('Invalid token');
   }
 }
