@@ -1,0 +1,15 @@
+.git
+.github
+.venv
+__pycache__
+*.py[cod]
+*.egg-info
+build
+dist
+config/config.toml
+data
+frontend
+logs
+research
+tests
+workspace

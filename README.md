@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.jpg" width="180" alt="OpenManus"/>
+  <img src="https://raw.githubusercontent.com/MohamedElsaeidy/OpenManus/main/assets/logo.jpg" width="180" alt="OpenManus"/>
 </p>
 
 English only.
@@ -67,6 +67,37 @@ OpenManus here is built for people who want an agent they can actually run, insp
 
 ## Quick Start (Docker)
 
+### PyPI deployment CLI
+
+The PyPI package is a lightweight deployment manager. The OpenManus runtime
+continues to run in Docker, where PostgreSQL, Redis, browser binaries, system
+tools, and the frontend can be installed reproducibly.
+
+```bash
+python -m pip install --upgrade openmanusv2
+openmanus doctor
+openmanus deploy ./openmanus
+```
+
+The deploy command downloads the production bundle matching the installed
+package version, verifies its SHA-256 checksum, creates `config/config.toml`,
+and starts the Compose stack. Open `http://localhost:3000` when startup
+finishes.
+
+Manage an existing deployment with:
+
+```bash
+openmanus status ./openmanus
+openmanus logs ./openmanus --follow
+openmanus down ./openmanus
+```
+
+For an LLM running on the Docker host, use a URL such as
+`http://host.docker.internal:1234/v1` in the Admin settings. The generated
+deployment includes the required host gateway mapping.
+
+### Repository checkout
+
 1. Copy config:
 
 ```bash
@@ -94,14 +125,19 @@ make build
 - Frontend: `http://localhost:3000`
 - API: `http://localhost:8000`
 
-## Local Python Start
+## Developer Installation
 
 ```bash
+git clone https://github.com/MohamedElsaeidy/OpenManus.git
+cd OpenManus
 uv venv --python 3.12
 source .venv/bin/activate
 uv pip install -r requirements.txt
-python main.py
+docker compose up --build
 ```
+
+`pip install openmanusv2` installs the deployment CLI, not a partial copy of
+the multi-service runtime as importable Python modules.
 
 ## Configuration
 

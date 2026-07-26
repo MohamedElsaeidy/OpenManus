@@ -60,5 +60,33 @@ jobs:
           python -m build
           twine check dist/*
 
+      - name: Verify deployment CLI package
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          wheels = list(Path("dist").glob("*.whl"))
+          if len(wheels) != 1:
+              raise SystemExit(f"Expected one wheel, found {len(wheels)}")
+          with ZipFile(wheels[0]) as wheel:
+              top_level = {
+                  name.split("/", 1)[0]
+                  for name in wheel.namelist()
+                  if "/" in name
+              }
+          unexpected = {
+              name
+              for name in top_level
+              if name != "openmanus_cli" and not name.endswith(".dist-info")
+          }
+          if unexpected:
+              raise SystemExit(f"Unexpected wheel contents: {sorted(unexpected)}")
+          PY
+          python -m venv /tmp/openmanus-package-smoke
+          /tmp/openmanus-package-smoke/bin/python -m pip install --no-deps dist/*.whl
+          /tmp/openmanus-package-smoke/bin/openmanus --version
+          /tmp/openmanus-package-smoke/bin/openmanus --help >/dev/null
+
       - name: Publish to PyPI with trusted publishing
         uses: pypa/gh-action-pypi-publish@release/v1
