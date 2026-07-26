@@ -139,7 +139,9 @@ def download_url(url: str, destination: Path) -> None:
     headers = {"User-Agent": "openmanus-deployer"}
     request = Request(url, headers=headers)
     try:
-        with urlopen(request, timeout=120) as response, destination.open("wb") as output:
+        with urlopen(request, timeout=120) as response, destination.open(
+            "wb"
+        ) as output:
             shutil.copyfileobj(response, output)
     except HTTPError as exc:
         raise DeploymentError(f"Download failed with HTTP {exc.code}: {url}") from exc
@@ -170,17 +172,14 @@ def _validate_tar_member(member: tarfile.TarInfo) -> None:
     has_windows_path = "\\" in member.name or (
         bool(path.parts) and path.parts[0].endswith(":")
     )
-    if (
-        not path.parts
-        or path.is_absolute()
-        or ".." in path.parts
-        or has_windows_path
-    ):
+    if not path.parts or path.is_absolute() or ".." in path.parts or has_windows_path:
         raise DeploymentError(f"Unsafe path in release archive: {member.name}")
     if member.issym() or member.islnk() or member.isdev():
         raise DeploymentError(f"Unsafe file type in release archive: {member.name}")
     if not (member.isfile() or member.isdir()):
-        raise DeploymentError(f"Unsupported file type in release archive: {member.name}")
+        raise DeploymentError(
+            f"Unsupported file type in release archive: {member.name}"
+        )
 
 
 def extract_release_archive(archive_path: Path, destination: Path) -> Path:
@@ -211,9 +210,13 @@ def extract_release_archive(archive_path: Path, destination: Path) -> Path:
     if not (bundle_root / "Dockerfile").is_file():
         raise DeploymentError("Release archive does not contain the backend Dockerfile")
     if not (bundle_root / "frontend" / "Dockerfile").is_file():
-        raise DeploymentError("Release archive does not contain the frontend Dockerfile")
+        raise DeploymentError(
+            "Release archive does not contain the frontend Dockerfile"
+        )
     if not (bundle_root / "config" / "config.example.toml").is_file():
-        raise DeploymentError("Release archive does not contain the example configuration")
+        raise DeploymentError(
+            "Release archive does not contain the example configuration"
+        )
     return bundle_root
 
 

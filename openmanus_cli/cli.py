@@ -94,7 +94,9 @@ def build_parser() -> argparse.ArgumentParser:
         prog="openmanus",
         description="Install and manage an OpenManus Docker deployment.",
     )
-    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {__version__}"
+    )
     subparsers = parser.add_subparsers(dest="command")
 
     subparsers.add_parser("doctor", help="Check Docker deployment prerequisites")

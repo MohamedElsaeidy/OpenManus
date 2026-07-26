@@ -1,8 +1,8 @@
 import hashlib
 import io
 import json
-import subprocess
 import shutil
+import subprocess
 import tarfile
 from pathlib import Path
 
@@ -108,7 +108,9 @@ def test_install_release_verifies_and_prepares_bundle(tmp_path):
     )
 
     def downloader(url: str, destination: Path) -> None:
-        shutil.copy2(source_archive if url == "archive" else source_checksum, destination)
+        shutil.copy2(
+            source_archive if url == "archive" else source_checksum, destination
+        )
 
     target, installed_assets, installed_digest = install_release(
         tmp_path / "deployment",
