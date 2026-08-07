@@ -48,7 +48,8 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import { Link, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { SidebarProvider } from './components/ui/sidebar';
+import { SidebarProvider, SidebarRail } from './components/ui/sidebar';
+import { FloatingSidebarTrigger } from './components/ui/sidebar-toggle';
 
 type ConnectionStyle = 'lm-studio' | 'ollama' | 'openai' | 'custom';
 
@@ -829,7 +830,14 @@ function App() {
               </Button>
             </div>
           </SidebarFooter>
+          {/* Draggable edge strip: click or drag it to collapse the sidebar. */}
+          <SidebarRail />
         </Sidebar>
+
+        {/* Offcanvas collapse hides the sidebar completely, so without this the
+            only way back is the ⌘B shortcut. Pages with their own header render
+            a trigger there; this covers the rest. */}
+        <FloatingSidebarTrigger />
 
         <Dialog open={isConnectionSettingsOpen} onOpenChange={setIsConnectionSettingsOpen}>
           <DialogContent className="sm:max-w-2xl">

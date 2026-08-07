@@ -14,6 +14,14 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 
 const SIDEBAR_COOKIE_NAME = 'sidebar_state';
 const SIDEBAR_COOKIE_MAX_AGE = 60 * 60 * 24 * 7;
+
+/** Last remembered open/closed state, or undefined if never set. */
+function readSidebarCookie(): boolean | undefined {
+  if (typeof document === 'undefined') return undefined;
+  const match = document.cookie.match(new RegExp(`(?:^|;\\s*)${SIDEBAR_COOKIE_NAME}=([^;]*)`));
+  if (!match) return undefined;
+  return match[1] === 'true';
+}
 const SIDEBAR_WIDTH = '16rem';
 const SIDEBAR_WIDTH_MOBILE = '18rem';
 const SIDEBAR_WIDTH_ICON = '3rem';
@@ -58,7 +66,10 @@ function SidebarProvider({
 
   // This is the internal state of the sidebar.
   // We use openProp and setOpenProp for control from outside the component.
-  const [_open, _setOpen] = React.useState(defaultOpen);
+  // Seeded from the cookie the setter below writes: upstream expects a server
+  // component to read it and pass defaultOpen, which never happens in this
+  // client-only app — so without this the sidebar reopened on every reload.
+  const [_open, _setOpen] = React.useState(() => readSidebarCookie() ?? defaultOpen);
   const open = openProp ?? _open;
   const setOpen = React.useCallback(
     (value: boolean | ((value: boolean) => boolean)) => {
