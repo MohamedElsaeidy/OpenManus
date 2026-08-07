@@ -6,6 +6,8 @@ export interface CreateTaskParams {
   model?: string;
   prompt: string;
   llm_connection?: Record<string, unknown>;
+  /** Composer mode for this message: instant | balanced | thinking | orchestrated. */
+  mode?: string;
 }
 
 export interface Task {
@@ -67,6 +69,9 @@ export async function createTask(
     const connectionPayload = params.llm_connection || getActiveConnectionPayload(params.model);
     if (connectionPayload) {
       formData.append('llm_connection', JSON.stringify(connectionPayload));
+    }
+    if (params.mode) {
+      formData.append('mode', params.mode);
     }
     formData.append('prompt', params.prompt);
 

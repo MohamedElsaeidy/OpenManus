@@ -426,13 +426,14 @@ export async function sendConversationMessage(
   message: string,
   model?: string,
   llm_connection?: Record<string, unknown>,
+  mode?: string,
 ): Promise<{ conversation_id: string; task_id: string; queued: boolean; created_task: boolean }> {
   const payloadConnection = llm_connection || getActiveConnectionPayload(model);
   const response = await fetch(`/api/conversations/${conversationId}/messages`, {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, model, llm_connection: payloadConnection }),
+    body: JSON.stringify({ message, model, llm_connection: payloadConnection, mode }),
   });
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));

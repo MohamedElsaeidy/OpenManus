@@ -87,3 +87,31 @@ All of it collapses under `prefers-reduced-motion: reduce`.
   destinations, they are tabs and they need words.
 - Reaching for a raw Tailwind colour instead of an activity token.
 - Animating anything on a loop that is not communicating live state.
+
+## Chat modes
+
+The composer picks how hard the agent works on one message: Instant, Balanced,
+Thinking, or Orchestrated. The first three map onto execution budgets; the
+fourth selects a different execution *strategy*. Mode is a per-message
+decision that outranks the workspace default, and it is remembered per
+conversation.
+
+Definitions live in `src/libs/chat-modes.ts` and mirror `CHAT_MODES` in
+`app/agent/execution_policy.py`. Each mode carries an activity-hue accent so
+the picker reads as part of the same system as the timeline.
+
+## Orchestration in the timeline
+
+An orchestrated run adds three moment shapes:
+
+- **fanout** — the lead's decomposition: why the work splits, and each worker's
+  brief, kind and scope directory.
+- **worker** — one worker, folding its start, completion and the lead's review
+  into a single entry. Status and verdict are chips; a rejection turns the
+  moment rose and shows the lead's reason above the worker's own claim.
+- **join** — how many results were accepted against how many ran.
+
+A worker's own summary is rendered as *reported*, never as fact. When the lead
+rejects it, the rejection is shown first. That ordering is the point: worker
+output is evidence, and the timeline should not let a confident-sounding
+summary outrank the review that threw it out.

@@ -8,6 +8,7 @@ import redis.asyncio as aioredis
 from fastapi import APIRouter, Form, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
 
+from app.agent.execution_policy import normalize_chat_mode
 from core.task import TaskStatus
 from server.api.deps import (
     REDIS_URL,
@@ -58,6 +59,7 @@ def _task_input(
     enable_vendor_skills: Optional[bool] = None,
     pinned_skills: Optional[list[str]] = None,
     identity_notes: Optional[str] = None,
+    mode: Optional[str] = None,
 ) -> dict:
     data = {"conversation_id": conversation_id}
     if not requested_context_window:
@@ -93,6 +95,11 @@ def _task_input(
         ]
     if identity_notes:
         data["identity_notes"] = str(identity_notes).strip()
+    # The composer's mode is per message, so it rides along with the task
+    # rather than mutating any conversation-wide setting.
+    normalized_mode = normalize_chat_mode(mode)
+    if normalized_mode:
+        data["mode"] = normalized_mode
     return data
 
 
@@ -258,6 +265,7 @@ async def create_task(
     conversation_id: Optional[str] = Form(None),
     model: Optional[str] = Form(None),
     llm_connection: Optional[str] = Form(None),
+    mode: Optional[str] = Form(None),
 ):
     user = _require_user(request)
     parsed_connection = None
@@ -343,6 +351,7 @@ async def create_task(
                         enable_vendor_skills=enable_vendor_skills,
                         pinned_skills=pinned_skills,
                         identity_notes=identity_notes,
+                        mode=mode,
                     )
                 )
                 task.status = TaskStatus.CREATED
@@ -385,6 +394,7 @@ async def create_task(
                                 enable_vendor_skills=enable_vendor_skills,
                                 pinned_skills=pinned_skills,
                                 identity_notes=identity_notes,
+                                mode=mode,
                             )
                         )
                         task.status = TaskStatus.CREATED
@@ -459,6 +469,7 @@ async def create_task(
             enable_vendor_skills=enable_vendor_skills,
             pinned_skills=pinned_skills,
             identity_notes=identity_notes,
+            mode=mode,
         ),
     )
     task.status = TaskStatus.CREATED
@@ -515,6 +526,7 @@ async def send_conversation_message(request: Request, conversation_id: str):
     body = await request.json()
     message = str(body.get("message") or body.get("prompt") or "").strip()
     requested_model = str(body.get("model") or "").strip() or None
+    mode = normalize_chat_mode(body.get("mode"))
     llm_connection = (
         body.get("llm_connection")
         if isinstance(body.get("llm_connection"), dict)
@@ -612,6 +624,7 @@ async def send_conversation_message(request: Request, conversation_id: str):
             enable_vendor_skills=enable_vendor_skills,
             pinned_skills=pinned_skills,
             identity_notes=identity_notes,
+            mode=mode,
         )
     )
     task.status = TaskStatus.CREATED

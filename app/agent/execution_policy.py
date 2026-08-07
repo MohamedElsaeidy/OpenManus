@@ -1,9 +1,43 @@
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
 
 ExecutionMode = Literal["fast", "balanced", "deep"]
+
+# What the composer offers, and what each choice means for one run.
+#
+# Chat modes are the user-facing vocabulary; ExecutionMode is the internal
+# budget profile. They are deliberately separate: "orchestrated" is a different
+# execution *strategy* that still needs a budget, and picking it should not
+# force the user to also reason about token ceilings.
+CHAT_MODES = ("instant", "balanced", "thinking", "orchestrated")
+
+ChatMode = Literal["instant", "balanced", "thinking", "orchestrated"]
+
+_CHAT_MODE_BUDGETS: dict[str, ExecutionMode] = {
+    "instant": "fast",
+    "balanced": "balanced",
+    "thinking": "deep",
+    # Orchestration fans work out to several workers, so the lead needs the
+    # widest budget to plan, review every result, and synthesise.
+    "orchestrated": "deep",
+}
+
+
+def normalize_chat_mode(mode: Optional[str]) -> Optional[str]:
+    """Return a known chat mode, or None when the caller did not pick one."""
+    normalized = str(mode or "").strip().lower()
+    return normalized if normalized in CHAT_MODES else None
+
+
+def execution_mode_for_chat_mode(mode: Optional[str]) -> Optional[ExecutionMode]:
+    normalized = normalize_chat_mode(mode)
+    return _CHAT_MODE_BUDGETS.get(normalized) if normalized else None
+
+
+def is_orchestrated(mode: Optional[str]) -> bool:
+    return normalize_chat_mode(mode) == "orchestrated"
 
 
 class ExecutionPolicy(BaseModel):

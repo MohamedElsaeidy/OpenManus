@@ -48,6 +48,23 @@ export type MomentPayload =
       running: boolean;
     }
   | { type: 'plan'; title: string; steps: PlanStep[]; progress: PlanProgress }
+  | {
+      type: 'fanout';
+      reasoning: string;
+      workers: { worker_id: string; title: string; kind: string; brief: string; scope: string }[];
+    }
+  | {
+      type: 'worker';
+      workerId: string;
+      workerTitle: string;
+      kind: string;
+      brief?: string;
+      scope?: string;
+      summary?: string;
+      status: string;
+      verdict?: string;
+      reviewReason?: string;
+    }
   | { type: 'note'; text: string; tone: 'neutral' | 'error' | 'success' };
 
 export type Moment = {
@@ -97,6 +114,8 @@ export const deriveMoments = (messages: Message[]): Moment[] => {
   const terminalIndexById = new Map<string, number>();
   /** Index of the single plan moment, which updates in place. */
   let planIndex = -1;
+  /** Worker id → index, so completion and review fold into the same moment. */
+  const workerIndexById = new Map<string, number>();
 
   messages.forEach((message, position) => {
     const type = asString(message.type);
@@ -252,6 +271,100 @@ export const deriveMoments = (messages: Message[]): Moment[] => {
         }
         moments.push({ id, kind: 'think', at, title, detail, running: false, payload });
         planIndex = moments.length - 1;
+        break;
+      }
+
+      case 'agent:lifecycle:orchestration:orchestration_planned': {
+        const workers = (Array.isArray(content.workers) ? content.workers : []) as {
+          worker_id: string;
+          title: string;
+          kind: string;
+          brief: string;
+          scope: string;
+        }[];
+        moments.push({
+          id,
+          kind: 'think',
+          at,
+          title: `Split into ${workers.length} parallel task${workers.length === 1 ? '' : 's'}`,
+          detail: asString(content.reasoning) || undefined,
+          running: false,
+          payload: {
+            type: 'fanout',
+            reasoning: asString(content.reasoning),
+            workers,
+          },
+        });
+        break;
+      }
+
+      case 'agent:lifecycle:orchestration:worker_started': {
+        const workerId = asString(content.worker_id);
+        moments.push({
+          id,
+          kind: activityKindFor(type, asString(content.kind)),
+          at,
+          title: asString(content.title) || workerId,
+          detail: 'working',
+          running: true,
+          payload: {
+            type: 'worker',
+            workerId,
+            workerTitle: asString(content.title) || workerId,
+            kind: asString(content.kind),
+            brief: asString(content.brief),
+            scope: asString(content.scope),
+            status: 'running',
+          },
+        });
+        workerIndexById.set(workerId, moments.length - 1);
+        break;
+      }
+
+      case 'agent:lifecycle:orchestration:worker_completed':
+      case 'agent:lifecycle:orchestration:worker_reviewed': {
+        // Both events fold into the worker's own moment, so one worker stays
+        // one entry on the timeline instead of three.
+        const workerId = asString(content.worker_id);
+        const index = workerIndexById.get(workerId);
+        if (index === undefined) break;
+        const moment = moments[index];
+        if (moment.payload.type !== 'worker') break;
+
+        if (type.endsWith('worker_completed')) {
+          moment.running = false;
+          moment.payload.status = asString(content.status) || 'completed';
+          moment.payload.summary = asString(content.summary);
+          moment.detail = moment.payload.status;
+        } else {
+          const verdict = asString(content.verdict);
+          moment.payload.verdict = verdict;
+          moment.payload.reviewReason = asString(content.reason);
+          moment.detail = verdict === 'accept' ? 'accepted' : 'rejected';
+          if (verdict !== 'accept') moment.kind = 'error';
+        }
+        break;
+      }
+
+      case 'agent:lifecycle:orchestration:orchestration_joined': {
+        const accepted = asNumber(content.accepted);
+        const total = asNumber(content.total);
+        moments.push({
+          id,
+          kind: accepted === total ? 'think' : 'error',
+          at,
+          title: `Reviewed ${total} result${total === 1 ? '' : 's'}`,
+          detail: `${accepted} accepted, ${asNumber(content.rejected)} rejected`,
+          running: false,
+          payload: {
+            type: 'note',
+            text:
+              accepted === total
+                ? 'Every worker result was accepted. Synthesising the delivery.'
+                : `${asNumber(content.rejected)} of ${total} results were rejected and excluded from the delivery.`,
+            tone: accepted === total ? 'success' : 'error',
+          },
+        });
         break;
       }
 
