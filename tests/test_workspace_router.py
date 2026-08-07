@@ -117,6 +117,64 @@ def test_agent_reported_paths_resolve_to_the_same_file(client, path):
     assert resolved.read_bytes() == PDF_BYTES
 
 
+def test_save_writes_file_and_reports_size(client, tmp_path):
+    response = client.put(
+        "/api/workspace/file/conversations/abc/paper.tex",
+        json={"content": "\\documentclass{report}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["path"] == "conversations/abc/paper.tex"
+    assert (tmp_path / "conversations/abc/paper.tex").read_text() == "\\documentclass{report}"
+
+
+def test_save_creates_missing_parent_directories(client, tmp_path):
+    response = client.put(
+        "/api/workspace/file/conversations/abc/notes/new.md", json={"content": "# New"}
+    )
+
+    assert response.status_code == 200
+    assert (tmp_path / "conversations/abc/notes/new.md").read_text() == "# New"
+
+
+def test_save_leaves_no_temp_files_behind(client, tmp_path):
+    client.put("/api/workspace/file/conversations/abc/paper.tex", json={"content": "x"})
+
+    leftovers = [p.name for p in (tmp_path / "conversations/abc").iterdir() if ".tmp" in p.name]
+    assert leftovers == []
+
+
+def test_save_preserves_the_existing_file_mode(client, tmp_path):
+    """os.replace inherits the temp file's 0600, which would lock other uids out."""
+    target = tmp_path / "conversations/abc/paper.tex"
+    target.chmod(0o644)
+
+    client.put("/api/workspace/file/conversations/abc/paper.tex", json={"content": "x"})
+
+    assert target.stat().st_mode & 0o777 == 0o644
+
+
+def test_new_files_are_group_and_world_readable(client, tmp_path):
+    client.put("/api/workspace/file/conversations/abc/fresh.txt", json={"content": "x"})
+
+    assert (tmp_path / "conversations/abc/fresh.txt").stat().st_mode & 0o777 == 0o644
+
+
+def test_save_rejects_a_directory_target(client):
+    response = client.put("/api/workspace/file/conversations/abc", json={"content": "x"})
+
+    assert response.status_code == 400
+
+
+def test_save_refuses_to_escape_the_workspace(client, tmp_path):
+    response = client.put(
+        "/api/workspace/file/../../escaped.txt", json={"content": "should not land"}
+    )
+
+    assert response.status_code in (400, 404)
+    assert not (tmp_path.parent / "escaped.txt").exists()
+
+
 @pytest.mark.parametrize(
     "path",
     [

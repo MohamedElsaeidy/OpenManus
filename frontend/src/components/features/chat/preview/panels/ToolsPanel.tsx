@@ -1,5 +1,5 @@
 import { Badge } from '@/components/ui/badge';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import type { Message } from '@/libs/chat-messages/types';
 import { LoaderIcon, SquareTerminalIcon } from 'lucide-react';
 
@@ -47,14 +47,14 @@ export const LiveActivityPanel = ({ messages }: { messages: Message[] }) => {
         : 'Running';
 
   return (
-    <div className="h-full min-h-0 p-4 space-y-3 overflow-auto">
+    <div className="h-full min-h-0 space-y-3 overflow-auto">
       {/* Live plan card — shown when the agent is using the planning tool */}
       {latestPlan && <PlanCard plan={latestPlan} />}
 
-      <Card className="flex min-h-0 flex-col overflow-hidden">
-        <CardHeader className="pb-2">
+      <section className="flex min-h-0 flex-col overflow-hidden">
+        <div className="pb-2">
           <div className="flex items-center justify-between">
-            <CardTitle className="text-base">Live Activity</CardTitle>
+            <h3 className="text-sm font-semibold">Live Activity</h3>
             <Badge
               variant={
                 status === 'Running' ? 'default' : status === 'Completed' ? 'outline' : 'destructive'
@@ -63,8 +63,8 @@ export const LiveActivityPanel = ({ messages }: { messages: Message[] }) => {
               {status}
             </Badge>
           </div>
-        </CardHeader>
-        <CardContent className="grid min-h-0 flex-1 grid-rows-[1fr_auto] gap-3 overflow-hidden">
+        </div>
+        <div className="grid min-h-0 flex-1 grid-rows-[1fr_auto] gap-3 overflow-hidden">
           <div className="min-h-0 overflow-auto rounded-md border">
             {recent.length ? (
               recent.map((message, index) => (
@@ -91,8 +91,8 @@ export const LiveActivityPanel = ({ messages }: { messages: Message[] }) => {
               {terminalTail || 'No terminal output yet.'}
             </pre>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
     </div>
   );
 };
@@ -207,8 +207,8 @@ export const TerminalOutputPanel = ({ messages }: { messages: Message[] }) => {
     .join('');
 
   return (
-    <div className="h-full min-h-0 p-4">
-      <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-md border bg-neutral-950 text-neutral-100">
+    <div className="h-full min-h-0">
+      <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border bg-neutral-950 text-neutral-100">
         <div className="flex items-center gap-2 border-b border-neutral-800 px-3 py-2 text-sm font-medium">
           <SquareTerminalIcon className="h-4 w-4" />
           Terminal
@@ -245,26 +245,30 @@ export const ToolPanel = ({
   const terminalInput = _getTerminalInput(name, parsedArgs);
 
   return (
-    <div className="h-full min-h-0 p-4">
-      <Card className="flex h-full min-h-0 flex-col overflow-hidden">
-        <CardHeader className="pb-2">
+    <div className="h-full min-h-0">
+      <section className="flex h-full min-h-0 flex-col overflow-hidden">
+        <header className="pb-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <SquareTerminalIcon className={`h-5 w-5 ${isTerminalTool ? 'text-primary' : 'text-muted-foreground'}`} />
-              <CardTitle className="text-base">{isTerminalTool ? 'Terminal' : 'Tool Execution'}</CardTitle>
+              <SquareTerminalIcon
+                className={`h-5 w-5 ${isTerminalTool ? 'text-activity-terminal' : 'text-activity-tool'}`}
+              />
+              <h3 className="text-sm font-semibold">
+                {isTerminalTool ? 'Terminal' : 'Tool Execution'}
+              </h3>
             </div>
             {isExecuting && (
-              <div className="flex items-center gap-1 text-amber-500">
+              <div className="text-activity-tool flex items-center gap-1">
                 <LoaderIcon className="h-4 w-4 animate-spin" />
                 <span className="text-xs font-medium">Running…</span>
               </div>
             )}
           </div>
           {toolId && (
-            <CardDescription className="font-mono text-xs">ID: {toolId}</CardDescription>
+            <p className="text-muted-foreground font-mono text-xs">ID: {toolId}</p>
           )}
-        </CardHeader>
-        <CardContent className="min-h-0 flex-1 space-y-4 overflow-auto">
+        </header>
+        <div className="min-h-0 flex-1 space-y-4 overflow-auto">
           {name && (
             <div className="space-y-1">
               <div className="text-muted-foreground text-xs font-medium">Tool</div>
@@ -297,8 +301,8 @@ export const ToolPanel = ({
               )}
             </>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </section>
     </div>
   );
 };

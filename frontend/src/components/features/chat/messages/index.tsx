@@ -145,7 +145,7 @@ const CompletionMessage = ({ message, startedAt, finishedAt }: CompletionMessage
     <div className="space-y-2 pt-1">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
         <span className="inline-flex items-center gap-1.5">
-          <Check className="h-3.5 w-3.5 text-emerald-600" />
+          <Check className="h-3.5 w-3.5 text-activity-file" />
           Completed
         </span>
         {startedAt && finishedAt && (
@@ -161,20 +161,20 @@ const CompletionMessage = ({ message, startedAt, finishedAt }: CompletionMessage
           <span className="inline-flex items-center gap-1.5">
             <FileDiff className="h-3.5 w-3.5" />
             {changeSummary.files} file{changeSummary.files === 1 ? '' : 's'} changed
-            <span className="font-mono text-emerald-600">+{changeSummary.added}</span>
-            <span className="font-mono text-rose-600">-{changeSummary.deleted}</span>
+            <span className="font-mono text-activity-file">+{changeSummary.added}</span>
+            <span className="font-mono text-activity-error">-{changeSummary.deleted}</span>
           </span>
         )}
       </div>
 
       {workspace?.warning && (
-        <div className="border-l-2 border-amber-500 px-3 py-1 text-sm text-amber-800 dark:text-amber-300">
+        <div className="border-l-2 border-activity-tool px-3 py-1 text-sm text-activity-tool">
           {workspace.warning}
           {logCount > 0 && <span className="ml-1">Found {logCount} log file{logCount === 1 ? '' : 's'}.</span>}
         </div>
       )}
       {planProgress && planProgress.total > 0 && planProgress.remaining.length > 0 && (
-        <div className="border-l-2 border-amber-500 px-3 py-1 text-sm">
+        <div className="border-l-2 border-activity-tool px-3 py-1 text-sm">
           Completed {planProgress.completed} of {planProgress.total} planned items. Remaining:{' '}
           {planProgress.remaining.slice(0, 4).join(' · ')}
           {planProgress.remaining.length > 4 ? ` · +${planProgress.remaining.length - 4} more` : ''}
@@ -213,7 +213,7 @@ const TerminatedMessage = ({ message, startedAt, finishedAt }: TerminatedMessage
   const reason = message.content.reason || message.content.detail;
   return (
     <div className="space-y-2 pt-1">
-      <div className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-300">
+      <div className="flex items-center gap-1.5 text-xs text-activity-tool">
         <CircleStop className="h-3.5 w-3.5" />
         Stopped before completion
       </div>
@@ -225,7 +225,7 @@ const TerminatedMessage = ({ message, startedAt, finishedAt }: TerminatedMessage
           finishedLabel="Stopped after"
         />
       )}
-      {reason && <div className="border-l-2 border-amber-500 px-3 py-1 text-sm">{reason}</div>}
+      {reason && <div className="border-l-2 border-activity-tool px-3 py-1 text-sm">{reason}</div>}
       {planProgress && planProgress.total > 0 && (
         <div className="text-xs text-muted-foreground">
           Plan progress: {planProgress.completed}/{planProgress.total}
@@ -258,7 +258,7 @@ const StepMessage = ({ message }: { message: LifecycleStep }) => {
       <summary className="flex cursor-pointer list-none items-center gap-3 py-2.5 text-sm">
         <span className="flex h-5 w-5 shrink-0 items-center justify-center text-muted-foreground">
           {stepError ? (
-            <AlertTriangle className="h-4 w-4 text-rose-500" />
+            <AlertTriangle className="h-4 w-4 text-activity-error" />
           ) : isRunning ? (
             <LoaderCircle className="h-4 w-4 animate-spin" />
           ) : (
@@ -277,7 +277,7 @@ const StepMessage = ({ message }: { message: LifecycleStep }) => {
         )}
         <ToolMessageContent message={message} />
         {stepError?.content?.message && (
-          <div className="border-l-2 border-rose-500 px-3 py-1 text-sm text-rose-700 dark:text-rose-300">
+          <div className="border-l-2 border-activity-error px-3 py-1 text-sm text-activity-error">
             {stepError.content.message}
           </div>
         )}
@@ -426,9 +426,9 @@ const LifecycleMessage = ({
           {verificationMessage && (
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               {verificationMessage.content.verified === true ? (
-                <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" />
+                <ShieldCheck className="h-3.5 w-3.5 text-activity-file" />
               ) : (
-                <ShieldAlert className="h-3.5 w-3.5 text-amber-600" />
+                <ShieldAlert className="h-3.5 w-3.5 text-activity-tool" />
               )}
               <span>
                 {verificationMessage.content.verified === true

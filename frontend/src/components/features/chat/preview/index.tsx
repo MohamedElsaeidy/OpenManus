@@ -1,14 +1,38 @@
+/**
+ * The Manus computer — the window onto what the agent is doing.
+ *
+ * Destinations are labelled tabs rather than a row of identical icon buttons:
+ * there are six of them, and an icon alone cannot distinguish "changes" from
+ * "files" from "timeline". Rarely-used controls (skills, vault, pause) stay as
+ * icons on the right where they do not compete with navigation.
+ */
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import type { Message } from '@/libs/chat-messages/types';
 import { cn } from '@/libs/utils';
-import { getConversationRuntime, pauseConversationSandbox, resumeConversationSandbox, type ConversationRuntime } from '@/services/conversations';
+import {
+  getConversationRuntime,
+  pauseConversationSandbox,
+  resumeConversationSandbox,
+  type ConversationRuntime,
+} from '@/services/conversations';
 import type { IntegrationsHealth } from '@/services/conversations';
-import { ActivityIcon, BookOpenIcon, FileClockIcon, FolderIcon, GlobeIcon, ListChecksIcon, NetworkIcon, PauseIcon, PlayIcon, SquareTerminalIcon } from 'lucide-react';
+import {
+  ActivityIcon,
+  ArrowLeftIcon,
+  BookOpenIcon,
+  Code2Icon,
+  FileClockIcon,
+  FolderIcon,
+  type LucideIcon,
+  NetworkIcon,
+  PauseIcon,
+  PlayIcon,
+  SquareTerminalIcon,
+  WavesIcon,
+} from 'lucide-react';
 import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { PreviewDescription } from './preview-description';
-import { usePreviewData } from './store';
-
+import { usePreviewData, type PreviewData } from './store';
 
 interface ChatPreviewProps {
   messages: Message[];
@@ -18,11 +42,32 @@ interface ChatPreviewProps {
   className?: string;
   performanceMode?: boolean;
   pollRuntime?: boolean;
+  isRunning?: boolean;
 }
 
 const PreviewContent = lazy(() =>
   import('./preview-content').then(mod => ({ default: mod.PreviewContent })),
 );
+
+type TabId = PreviewData['type'];
+
+const TABS: { id: TabId; label: string; icon: LucideIcon; needsConversation?: boolean }[] = [
+  { id: 'timeline', label: 'Timeline', icon: WavesIcon },
+  { id: 'editor', label: 'Editor', icon: Code2Icon },
+  { id: 'workspace', label: 'Files', icon: FolderIcon },
+  { id: 'terminal', label: 'Terminal', icon: SquareTerminalIcon },
+  { id: 'changes', label: 'Changes', icon: FileClockIcon },
+  { id: 'runtime', label: 'Runtime', icon: ActivityIcon, needsConversation: true },
+];
+
+/** Views reached by clicking something in the chat rather than by a tab. */
+const DETOUR_LABELS: Partial<Record<TabId, string>> = {
+  tool: 'Tool call',
+  browser: 'Page capture',
+  skills: 'Skills',
+  vault: 'Vault sync',
+  live: 'Live activity',
+};
 
 export const ChatPreview = ({
   messages,
@@ -32,11 +77,15 @@ export const ChatPreview = ({
   className,
   performanceMode = false,
   pollRuntime = false,
+  isRunning = false,
 }: ChatPreviewProps) => {
-  const { setData } = usePreviewData();
+  const { data, setData } = usePreviewData();
   const [runtime, setRuntime] = useState<ConversationRuntime | null>(null);
   const runtimeDigestRef = useRef('');
   const workspacePath = `conversations/${conversationId || taskId}`;
+
+  const active: TabId = data?.type ?? 'timeline';
+  const detourLabel = DETOUR_LABELS[active];
 
   useEffect(() => {
     if (!conversationId) return;
@@ -87,99 +136,196 @@ export const ChatPreview = ({
     };
   }, [conversationId, performanceMode, pollRuntime]);
 
-  return (
-    <Card className={cn('flex h-full w-full flex-col gap-0 px-2', className)}>
-      <CardHeader className="flex-none p-2 py-1">
-        <div className="flex items-center justify-between">
-          <div className="flex min-w-0 items-center gap-2">
-            <CardTitle className="text-normal">Manus's Computer</CardTitle>
-            {runtime && (
-              <button
-                className={cn(
-                  'rounded-full border px-2 py-0.5 text-xs',
-                  runtime.running_count > 0 ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700' : 'text-muted-foreground',
-                )}
-                onClick={() => conversationId && setData({ type: 'runtime', conversationId, tab: 'processes' })}
-                title="Runtime processes"
-              >
-                {runtime.running_count > 0 ? `${runtime.running_count} running` : 'idle'}
-              </button>
-            )}
-            {integrationsHealth && (
-              <div className="hidden items-center gap-1.5 md:flex">
-                <span className="rounded border px-1.5 py-0.5 text-[10px]">
-                  Memory:{' '}
-                  <span className={integrationsHealth.agentmemory?.live ? 'text-emerald-500' : 'text-amber-500'}>
-                    {integrationsHealth.agentmemory?.live ? 'Live' : 'Down'}
-                  </span>
-                </span>
-                <span className="rounded border px-1.5 py-0.5 text-[10px]">
-                  Obsidian:{' '}
-                  <span className={integrationsHealth.obsidian?.live ? 'text-emerald-500' : 'text-amber-500'}>
-                    {integrationsHealth.obsidian?.live ? 'Live' : 'Waiting'}
-                  </span>
-                </span>
-              </div>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            {conversationId && (
-              <>
-                <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setData({ type: 'runtime', conversationId, tab: 'processes' })} title="Processes">
-                  <ActivityIcon className="h-3.5 w-3.5" />
-                </Button>
-                <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setData({ type: 'live' })} title="Live activity">
-                  <ListChecksIcon className="h-3.5 w-3.5" />
-                </Button>
-                <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setData({ type: 'runtime', conversationId, tab: 'ports' })} title="Ports and URLs">
-                  <GlobeIcon className="h-3.5 w-3.5" />
-                </Button>
-                <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setData({ type: 'terminal' })} title="Terminal">
-                  <SquareTerminalIcon className="h-3.5 w-3.5" />
-                </Button>
-                <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setData({ type: 'changes' })} title="Changes">
-                  <FileClockIcon className="h-3.5 w-3.5" />
-                </Button>
-                <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setData({ type: 'skills', conversationId })} title="Skills">
-                  <BookOpenIcon className="h-3.5 w-3.5" />
-                </Button>
-                <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setData({ type: 'vault', conversationId })} title="Vault Sync">
-                  <NetworkIcon className="h-3.5 w-3.5" />
-                </Button>
+  const openTab = (id: TabId) => {
+    if (id === 'runtime') {
+      if (conversationId) setData({ type: 'runtime', conversationId, tab: 'processes' });
+      return;
+    }
+    if (id === 'workspace') {
+      setData({ type: 'workspace', path: workspacePath });
+      return;
+    }
+    if (id === 'editor') {
+      setData({ type: 'editor' });
+      return;
+    }
+    setData({ type: id } as PreviewData);
+  };
 
-                <Button
-                  variant="outline"
-                  size="icon"
-                  className="h-8 w-8"
-                  onClick={async () => {
-                    if (runtime?.sandbox?.status === 'paused') await resumeConversationSandbox(conversationId);
-                    else await pauseConversationSandbox(conversationId);
-                    setRuntime(await getConversationRuntime(conversationId));
-                  }}
-                  title={runtime?.sandbox?.status === 'paused' ? 'Resume computer' : 'Pause computer'}
-                >
-                  {runtime?.sandbox?.status === 'paused' ? <PlayIcon className="h-3.5 w-3.5" /> : <PauseIcon className="h-3.5 w-3.5" />}
-                </Button>
-              </>
-            )}
-            <Button
-              variant="outline"
-              size="icon"
-              className="h-8 w-8 hover:bg-accent/80"
-              onClick={() => setData({ type: 'workspace', path: workspacePath })}
-              title="Workspace"
-            >
-              <FolderIcon className="h-3.5 w-3.5" />
-            </Button>
+  const isPaused = runtime?.sandbox?.status === 'paused';
+
+  return (
+    <section
+      className={cn(
+        'bg-card flex h-full w-full min-w-0 flex-col overflow-hidden rounded-xl border shadow-sm',
+        className,
+      )}
+    >
+      {/* Title row */}
+      <header className="flex flex-none items-center gap-2 border-b px-3 py-2">
+        <h2 className="text-sm font-semibold tracking-tight">Manus's Computer</h2>
+
+        <RuntimePill
+          runtime={runtime}
+          isRunning={isRunning}
+          onClick={() =>
+            conversationId && setData({ type: 'runtime', conversationId, tab: 'processes' })
+          }
+        />
+
+        {integrationsHealth && (
+          <div className="hidden items-center gap-1 lg:flex">
+            <HealthChip label="Memory" live={Boolean(integrationsHealth.agentmemory?.live)} />
+            <HealthChip label="Obsidian" live={Boolean(integrationsHealth.obsidian?.live)} />
           </div>
+        )}
+
+        <div className="ml-auto flex items-center gap-1">
+          {conversationId && (
+            <>
+              <IconAction
+                icon={BookOpenIcon}
+                label="Skills"
+                onClick={() => setData({ type: 'skills', conversationId })}
+              />
+              <IconAction
+                icon={NetworkIcon}
+                label="Vault sync"
+                onClick={() => setData({ type: 'vault', conversationId })}
+              />
+              <IconAction
+                icon={isPaused ? PlayIcon : PauseIcon}
+                label={isPaused ? 'Resume computer' : 'Pause computer'}
+                onClick={async () => {
+                  if (isPaused) await resumeConversationSandbox(conversationId);
+                  else await pauseConversationSandbox(conversationId);
+                  setRuntime(await getConversationRuntime(conversationId));
+                }}
+              />
+            </>
+          )}
         </div>
-        <PreviewDescription messages={messages} />
-      </CardHeader>
-      <CardContent className="flex-1 overflow-hidden p-2">
-        <Suspense fallback={<div className="text-xs text-muted-foreground p-3">Loading preview...</div>}>
-          <PreviewContent messages={messages} performanceMode={performanceMode} />
+      </header>
+
+      {/* Tabs */}
+      <nav
+        role="tablist"
+        aria-label="Computer views"
+        className="flex flex-none items-center gap-0.5 overflow-x-auto border-b px-2"
+      >
+        {TABS.filter(tab => !tab.needsConversation || conversationId).map(tab => {
+          const isActive = active === tab.id;
+          return (
+            <button
+              key={tab.id}
+              role="tab"
+              aria-selected={isActive}
+              onClick={() => openTab(tab.id)}
+              className={cn(
+                'relative flex items-center gap-1.5 px-2.5 py-2 text-xs font-medium whitespace-nowrap transition-colors',
+                isActive ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              <tab.icon className="h-3.5 w-3.5" />
+              {tab.label}
+              {isActive && (
+                /* The one gradient in the product: identity, not decoration. */
+                <span className="from-brand to-brand-accent absolute inset-x-1 -bottom-px h-[2px] rounded-full bg-gradient-to-r" />
+              )}
+            </button>
+          );
+        })}
+
+        {detourLabel && (
+          <button
+            onClick={() => setData({ type: 'timeline' })}
+            className="text-muted-foreground hover:text-foreground ml-auto flex items-center gap-1 px-2 py-2 text-xs"
+          >
+            <ArrowLeftIcon className="h-3 w-3" />
+            {detourLabel}
+          </button>
+        )}
+      </nav>
+
+      <PreviewDescription messages={messages} />
+
+      <div className="min-h-0 min-w-0 flex-1 overflow-hidden p-3">
+        <Suspense
+          fallback={<div className="text-muted-foreground p-3 text-xs">Loading preview…</div>}
+        >
+          <PreviewContent
+            messages={messages}
+            performanceMode={performanceMode}
+            isRunning={isRunning}
+            workspacePath={workspacePath}
+          />
         </Suspense>
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   );
 };
+
+// ---------------------------------------------------------------------------
+// Header pieces
+// ---------------------------------------------------------------------------
+
+const RuntimePill = ({
+  runtime,
+  isRunning,
+  onClick,
+}: {
+  runtime: ConversationRuntime | null;
+  isRunning: boolean;
+  onClick: () => void;
+}) => {
+  if (!runtime) return null;
+  const busy = runtime.running_count > 0 || isRunning;
+
+  return (
+    <button
+      onClick={onClick}
+      title="Runtime processes"
+      className={cn(
+        'flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors',
+        busy
+          ? 'border-brand/40 bg-brand/10 text-brand'
+          : 'text-muted-foreground hover:text-foreground',
+      )}
+    >
+      <span
+        className={cn(
+          'h-1.5 w-1.5 rounded-full',
+          busy ? 'bg-brand live-dot' : 'bg-muted-foreground/50',
+        )}
+      />
+      {runtime.running_count > 0 ? `${runtime.running_count} running` : busy ? 'working' : 'idle'}
+    </button>
+  );
+};
+
+const HealthChip = ({ label, live }: { label: string; live: boolean }) => (
+  <span
+    className={cn(
+      'rounded border px-1.5 py-0.5 text-[10px]',
+      live
+        ? 'border-activity-file-border bg-activity-file-surface text-activity-file'
+        : 'border-activity-tool-border bg-activity-tool-surface text-activity-tool',
+    )}
+  >
+    {label} {live ? 'live' : 'down'}
+  </span>
+);
+
+const IconAction = ({
+  icon: Icon,
+  label,
+  onClick,
+}: {
+  icon: LucideIcon;
+  label: string;
+  onClick: () => void;
+}) => (
+  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClick} title={label} aria-label={label}>
+    <Icon className="h-3.5 w-3.5" />
+  </Button>
+);

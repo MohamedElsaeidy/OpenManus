@@ -7,12 +7,25 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
 from server.api import deps
 
 
 router = APIRouter(prefix="/api/workspace", tags=["workspace"])
+
+# An editor save is a human typing, not a data import. Anything past this is a
+# mistake, and refusing keeps a runaway paste from filling the volume.
+MAX_WRITE_BYTES = 10 * 1024 * 1024
+
+# New files land readable by the host user and any sandbox uid, matching what
+# the agent's own tools produce.
+DEFAULT_FILE_MODE = 0o644
+
+
+class WriteFileRequest(BaseModel):
+    content: str
 
 # Paths the agent reports are absolute inside its own sandbox ("/workspace/x")
 # or inside the API container ("/app/workspace/x"). Both mean the same file on
@@ -116,6 +129,54 @@ async def download_workspace(path: str = ""):
         )
 
     return _zip_directory(target)
+
+
+@router.put("/file/{path:path}")
+async def write_workspace_file(path: str, body: WriteFileRequest):
+    """Save editor content back to a workspace file.
+
+    Writes through a temporary file in the same directory and replaces the
+    target, so an interrupted save leaves the original intact rather than a
+    truncated file the agent would then read as gospel.
+    """
+    target = _resolve(path)
+
+    if target.is_dir():
+        raise HTTPException(status_code=400, detail="Path is a directory")
+    if len(body.content.encode("utf-8")) > MAX_WRITE_BYTES:
+        raise HTTPException(status_code=413, detail="File too large to save")
+
+    # os.replace carries the temp file's mode across, and NamedTemporaryFile
+    # creates at 0600. Without restoring the original mode, saving a file
+    # silently strips group/other access — locking the host user, and any
+    # sandbox running as another uid, out of the agent's own workspace.
+    mode = target.stat().st_mode & 0o777 if target.exists() else DEFAULT_FILE_MODE
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    handle = tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        newline="",
+        dir=target.parent,
+        prefix=f".{target.name}.",
+        suffix=".tmp",
+        delete=False,
+    )
+    try:
+        with handle as stream:
+            stream.write(body.content)
+        os.chmod(handle.name, mode)
+        os.replace(handle.name, target)
+    except Exception:
+        Path(handle.name).unlink(missing_ok=True)
+        raise
+
+    stat = target.stat()
+    return {
+        "path": str(target.relative_to(_workspace_root())),
+        "size": stat.st_size,
+        "modifiedTime": datetime.datetime.fromtimestamp(stat.st_mtime).isoformat(),
+    }
 
 
 @router.get("/{path:path}")

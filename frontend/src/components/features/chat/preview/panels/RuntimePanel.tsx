@@ -55,7 +55,7 @@ export const RuntimePanel = ({
   };
 
   return (
-    <div className="h-full min-h-0 p-4">
+    <div className="h-full min-h-0">
       <Card className="flex h-full min-h-0 flex-col overflow-hidden">
         <CardHeader className="pb-2">
           <div className="flex items-center justify-between">

@@ -1,10 +1,12 @@
+import base64
+import binascii
 import logging
 import os
 import shutil
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from sqlalchemy import func
 
 from app.config import config
@@ -245,30 +247,47 @@ def _truncate_text(value: str, limit: int = 8000) -> str:
     return value[:limit] + f"\n...[truncated {len(value) - limit} chars]"
 
 
-def _compact_history_value(value, *, text_limit: int = 8000):
+IMAGE_KEYS = {"screenshot", "base64_image", "image"}
+
+
+def _compact_history_value(value, *, text_limit: int = 8000, image_url: str = ""):
     if isinstance(value, str):
         return _truncate_text(value, text_limit)
     if isinstance(value, list):
         return [
-            _compact_history_value(item, text_limit=text_limit) for item in value[:200]
+            _compact_history_value(item, text_limit=text_limit, image_url=image_url)
+            for item in value[:200]
         ]
     if isinstance(value, dict):
         compacted = {}
         for key, item in value.items():
             key_s = str(key)
-            if key_s in {"screenshot", "base64_image", "image"} and isinstance(
-                item, str
-            ):
-                compacted[key_s] = f"[omitted base64 payload: {len(item)} chars]"
+            if key_s in IMAGE_KEYS and isinstance(item, str):
+                # Inlining screenshots would make a history page tens of
+                # megabytes, but dropping them lost every past capture on
+                # reload. Hand back a URL instead: the full payload is still in
+                # the events table, and the client fetches it only when the
+                # image is actually rendered.
+                compacted[key_s] = image_url
                 continue
-            compacted[key_s] = _compact_history_value(item, text_limit=text_limit)
+            compacted[key_s] = _compact_history_value(
+                item, text_limit=text_limit, image_url=image_url
+            )
         return compacted
     return value
 
 
-def _compact_history_event(event: dict) -> dict:
+def _compact_history_event(event: dict, conversation_id: str = "") -> dict:
     compacted = dict(event)
-    compacted["content"] = _compact_history_value(event.get("content") or {})
+    event_id = event.get("event_id")
+    image_url = (
+        f"/api/conversations/{conversation_id}/events/{event_id}/image"
+        if event_id is not None and conversation_id
+        else ""
+    )
+    compacted["content"] = _compact_history_value(
+        event.get("content") or {}, image_url=image_url
+    )
     return compacted
 
 
@@ -489,12 +508,12 @@ async def get_conversation_event_history(
                     continue
                 if is_complete and task_key:
                     has_emitted_complete_by_task.add(task_key)
-                events.append(_compact_history_event(event))
+                events.append(_compact_history_event(event, conversation_id))
     else:
         for task in tasks:
             events.extend(
                 [
-                    _compact_history_event(item)
+                    _compact_history_event(item, conversation_id)
                     for item in await _task_stream_progress(task)
                 ]
             )
@@ -510,6 +529,44 @@ async def get_conversation_event_history(
             "has_more": len(rows) == page_size and next_before_event_id is not None,
         },
     }
+
+
+@router.get("/{conversation_id}/events/{event_id}/image")
+async def get_conversation_event_image(
+    request: Request, conversation_id: str, event_id: int
+):
+    """Serve the full-resolution capture stored on one event.
+
+    History responses replace image payloads with a link here so a page load
+    stays small while past screenshots remain viewable.
+    """
+    user = _require_user(request)
+    with registry.SessionLocal() as session:
+        conversation = _require_conversation(session, user.user_id, conversation_id)
+        row = session.get(ConversationEventORM, event_id)
+        if row is None or row.conversation_id != conversation.conversation_id:
+            raise HTTPException(status_code=404, detail="Event not found")
+        payload = row.payload or {}
+
+    encoded = next(
+        (payload[key] for key in IMAGE_KEYS if isinstance(payload.get(key), str)), None
+    )
+    if not encoded:
+        raise HTTPException(status_code=404, detail="Event has no image")
+
+    if encoded.startswith("data:"):
+        encoded = encoded.split(",", 1)[-1]
+    try:
+        raw = base64.b64decode(encoded, validate=False)
+    except (binascii.Error, ValueError):
+        raise HTTPException(status_code=422, detail="Image payload is not valid base64")
+
+    return Response(
+        content=raw,
+        media_type="image/png",
+        # Event payloads never change once written, so this can be cached hard.
+        headers={"Cache-Control": "private, max-age=31536000, immutable"},
+    )
 
 
 @router.get("/{conversation_id}/events/count")

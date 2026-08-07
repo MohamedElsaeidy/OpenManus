@@ -88,25 +88,28 @@ export const ToolMessageContent = ({
     item => item.type === 'agent:lifecycle:step:act:tool',
   ) || []) as (AggregatedMessage & { type: 'agent:lifecycle:step:act:tool' })[];
 
+  // Same treatment as the timeline's diff view: tinted rows on the themed
+  // surface rather than a fixed dark block, so one diff does not read as a
+  // different kind of object depending on where it appears.
   const renderDiff = (lines: string[]) => {
     if (!lines.length) return null;
     return (
-      <div className="mt-2 max-h-72 overflow-auto rounded-md bg-zinc-950 p-2 font-mono text-[11px] leading-5">
+      <pre className="mt-2 max-h-72 overflow-auto rounded-md border font-mono text-[11px] leading-5">
         {lines.map((line, index) => {
           const className = line.startsWith('+')
-            ? 'text-emerald-300'
+            ? 'bg-activity-file-surface text-activity-file'
             : line.startsWith('-')
-              ? 'text-rose-300'
+              ? 'bg-activity-error-surface text-activity-error'
               : line.startsWith('@@') || line.startsWith('---') || line.startsWith('+++')
-                ? 'text-cyan-300'
-                : 'text-zinc-300';
+                ? 'bg-muted text-muted-foreground'
+                : '';
           return (
-            <div key={index} className={className}>
+            <div key={index} className={`px-2 ${className}`}>
               {line || ' '}
             </div>
           );
         })}
-      </div>
+      </pre>
     );
   };
 
@@ -154,9 +157,9 @@ export const ToolMessageContent = ({
               </span>
               <span className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
                 {hasError ? (
-                  <TriangleAlert className="h-3.5 w-3.5 text-rose-500" />
+                  <TriangleAlert className="h-3.5 w-3.5 text-activity-error" />
                 ) : executeComplete ? (
-                  <Check className="h-3.5 w-3.5 text-emerald-600" />
+                  <Check className="h-3.5 w-3.5 text-activity-file" />
                 ) : (
                   <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
                 )}
@@ -165,7 +168,7 @@ export const ToolMessageContent = ({
             </button>
 
             {shortResult && (
-              <div className={`mt-1.5 pl-5 text-xs leading-5 ${hasError ? 'text-rose-600 dark:text-rose-300' : 'text-muted-foreground'}`}>
+              <div className={`mt-1.5 pl-5 text-xs leading-5 ${hasError ? 'text-activity-error' : 'text-muted-foreground'}`}>
                 {shortResult}
                 {resultText.length > 220 ? '…' : ''}
               </div>
@@ -178,8 +181,8 @@ export const ToolMessageContent = ({
                   .slice(0, 3)
                   .join(' · ')}
                 {fileUpdates.length > 3 ? ` · +${fileUpdates.length - 3} more` : ''}
-                <span className="ml-2 font-mono text-emerald-600">+{added}</span>
-                <span className="ml-1 font-mono text-rose-600">-{deleted}</span>
+                <span className="ml-2 font-mono text-activity-file">+{added}</span>
+                <span className="ml-1 font-mono text-activity-error">-{deleted}</span>
               </div>
             )}
             {diffLines.length > 0 && <div className="pl-5">{renderDiff(diffLines)}</div>}
