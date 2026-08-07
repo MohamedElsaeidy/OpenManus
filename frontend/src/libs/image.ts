@@ -7,6 +7,11 @@ export const getBase64ImageUrl = (base64String: string) => {
 };
 
 export const getImageUrl = (path: string) => {
+  // History hands back a link to the stored capture rather than inlining
+  // megabytes of base64; live events still carry the raw payload.
+  if (path.startsWith('/api/') || path.startsWith('http://') || path.startsWith('https://')) {
+    return path;
+  }
   if (path.startsWith('/workspace')) {
     const parts = path.split('/');
     if (parts.length >= 3) {

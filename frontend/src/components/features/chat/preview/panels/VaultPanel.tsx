@@ -593,7 +593,7 @@ export const VaultPanel = ({ conversationId }: { conversationId: string }) => {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 p-4">
+    <div className="flex h-full min-h-0 flex-col gap-3">
       {/* Stats bar */}
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-3">

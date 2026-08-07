@@ -9,13 +9,23 @@ import type { Message } from '@/libs/chat-messages/types';
 import { useAsync } from '@/hooks/use-async';
 import { listSkills } from '@/services/conversations';
 import { Badge } from '@/components/ui/badge';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Suspense, lazy } from 'react';
 import { usePreviewData } from './store';
 import { BrowserPanel } from './panels/BrowserPanel';
 import { RuntimePanel } from './panels/RuntimePanel';
+import { TimelinePanel } from './panels/TimelinePanel';
 import { LiveActivityPanel, TerminalOutputPanel, ToolPanel } from './panels/ToolsPanel';
 import { WorkspacePanel, ChangesPanel } from './panels/WorkspacePanel';
 import { VaultPanel } from './panels/VaultPanel';
+
+/**
+ * Monaco is ~2.5MB. Keeping the editor in its own chunk means opening a
+ * conversation and watching the timeline never downloads it — only clicking
+ * the Editor tab does.
+ */
+const EditorPanel = lazy(() =>
+  import('./panels/EditorPanel').then(mod => ({ default: mod.EditorPanel })),
+);
 
 // ---------------------------------------------------------------------------
 // Router
@@ -24,11 +34,34 @@ import { VaultPanel } from './panels/VaultPanel';
 export const PreviewContent = ({
   messages,
   performanceMode = false,
+  isRunning = false,
+  workspacePath,
 }: {
   messages: Message[];
   performanceMode?: boolean;
+  isRunning?: boolean;
+  workspacePath?: string;
 }) => {
   const { data } = usePreviewData();
+
+  // Default view: the scrubbable record of what the agent has done.
+  if (!data || data.type === 'timeline') {
+    return <TimelinePanel messages={messages} isRunning={isRunning} />;
+  }
+
+  if (data.type === 'editor') {
+    return (
+      <Suspense
+        fallback={
+          <div className="text-muted-foreground flex h-full items-center justify-center text-xs">
+            Loading editor…
+          </div>
+        }
+      >
+        <EditorPanel root={workspacePath} initialPath={data.path} />
+      </Suspense>
+    );
+  }
 
   // Tool execution detail
   if (data?.type === 'tool') {
@@ -95,8 +128,7 @@ export const PreviewContent = ({
     return <VaultPanel conversationId={data.conversationId} />;
   }
 
-  // Default: live activity feed
-  return <LiveActivityPanel messages={messages} />;
+  return <TimelinePanel messages={messages} isRunning={isRunning} />;
 };
 
 // ---------------------------------------------------------------------------
@@ -108,13 +140,15 @@ const SkillsPanel = ({ conversationId }: { conversationId?: string }) => {
     deps: [conversationId],
   });
   return (
-    <div className="h-full min-h-0 p-4">
-      <Card className="flex h-full min-h-0 flex-col overflow-hidden">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">Skills</CardTitle>
-          <CardDescription>OpenHands-style skills available to this conversation.</CardDescription>
-        </CardHeader>
-        <CardContent className="min-h-0 flex-1 overflow-auto">
+    <div className="flex h-full min-h-0 flex-col">
+      <section className="flex h-full min-h-0 flex-col overflow-hidden">
+        <header className="flex-none pb-2">
+          <h3 className="text-sm font-semibold">Skills</h3>
+          <p className="text-muted-foreground text-xs">
+            OpenHands-style skills available to this conversation.
+          </p>
+        </header>
+        <div className="min-h-0 flex-1 overflow-auto">
           {isLoading ? (
             <div className="text-muted-foreground text-sm">Loading skills…</div>
           ) : skills?.skills.length ? (
@@ -137,8 +171,8 @@ const SkillsPanel = ({ conversationId }: { conversationId?: string }) => {
           ) : (
             <div className="text-muted-foreground text-sm">No skills found.</div>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </section>
     </div>
   );
 };

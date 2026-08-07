@@ -85,27 +85,6 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
     };
   }, []);
 
-  const applyPreviewFromMessage = useCallback((newMessage: Message) => {
-    if (newMessage.type === 'agent:lifecycle:step:think:browser:browse:complete') {
-      setPreviewData({
-        type: 'browser',
-        url: newMessage.content.url,
-        title: newMessage.content.title,
-        screenshot: newMessage.content.screenshot,
-      });
-    }
-    if (
-      newMessage.type === 'agent:lifecycle:step:act:tool:execute:start' &&
-      newMessage.content.name !== 'terminate'
-    ) {
-      setPreviewData({ type: 'tool', toolId: newMessage.content.id });
-    }
-    if (newMessage.type === 'agent:lifecycle:step:act:tool:file:updated') {
-      const path = String(newMessage.content.path || '').replace(/^\/app\/workspace\/?/, '');
-      setPreviewData({ type: 'workspace', path });
-    }
-  }, [setPreviewData]);
-
   const appendLocalUserMessage = useCallback((prompt: string) => {
     const key = `local:user:${Date.now()}:${Math.random().toString(36).slice(2)}`;
     seenEventKeysRef.current.add(key);
@@ -174,13 +153,10 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
                       ),
                   )
                 : prevMessages;
-            const updatedMessages = [...baseMessages, newMessage];
-
-            if (shouldAutoScrollRef.current) {
-              applyPreviewFromMessage(newMessage);
-            }
-
-            return updatedMessages;
+            // The computer panel is no longer switched per event: the timeline
+            // is the live view and follows new work on its own, so yanking the
+            // panel between four views mid-run only stole the user's place.
+            return [...baseMessages, newMessage];
           });
 
           if (data.name === 'agent:lifecycle:complete') {
@@ -276,7 +252,7 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
       }
       setIsThinking(true);
     };
-  }, [applyPreviewFromMessage, toMessage]);
+  }, [toMessage]);
 
   const loadConversation = useCallback(async (targetConversationId: string) => {
     try {
@@ -309,14 +285,6 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
       isTaskCompletedRef.current = !activeTask && Boolean(latestTask);
       setIsThinking(Boolean(activeTask));
       setIsTerminating(false);
-      if (nextMessages.length) {
-        const lastPreviewMessage = [...nextMessages].reverse().find(message =>
-          message.type === 'agent:lifecycle:step:think:browser:browse:complete' ||
-          message.type === 'agent:lifecycle:step:act:tool:execute:start' ||
-          message.type === 'agent:lifecycle:step:act:tool:file:updated'
-        );
-        if (lastPreviewMessage) applyPreviewFromMessage(lastPreviewMessage);
-      }
       if (activeTask?.task_id) {
         setupEventSource(activeTask.task_id);
       }
@@ -326,7 +294,7 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
       setConversationId(targetConversationId);
       setActiveConversationId(targetConversationId);
     }
-  }, [applyPreviewFromMessage, setActiveConversationId, setupEventSource, toMessage]);
+  }, [setActiveConversationId, setupEventSource, toMessage]);
 
   useEffect(() => {
     let cancelled = false;
@@ -539,7 +507,7 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
               {isPreviewCollapsed ? <PanelRightOpen className="size-4" /> : <PanelRightClose className="size-4" />}
             </button>
             <button
-              className={`inline-flex h-8 w-8 items-center justify-center rounded-md border hover:bg-muted ${performanceMode ? 'border-emerald-500/50 text-emerald-600' : ''}`}
+              className={`inline-flex h-8 w-8 items-center justify-center rounded-md border hover:bg-muted ${performanceMode ? 'border-activity-file text-activity-file' : ''}`}
               onClick={() => {
                 setPerformanceMode(prev => {
                   const next = !prev;
@@ -602,6 +570,7 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
             integrationsHealth={integrationsHealth}
             performanceMode={performanceMode}
             pollRuntime={isThinking || previewData?.type === 'runtime'}
+            isRunning={isThinking && !isTaskCompleted}
           />
         </div>
       )}

@@ -323,7 +323,7 @@ export default function AdminPage() {
                     type="button"
                     onClick={refreshModels}
                     disabled={isModelsLoading}
-                    className="flex items-center gap-1 text-[11px] text-blue-500 hover:underline disabled:opacity-50"
+                    className="flex items-center gap-1 text-[11px] text-brand hover:underline disabled:opacity-50"
                   >
                     <RefreshCcw className={`size-3 ${isModelsLoading ? 'animate-spin' : ''}`} />
                     Refresh list
@@ -423,7 +423,7 @@ export default function AdminPage() {
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">
                   Thinking Budget
-                  <span className="ml-1 text-amber-500">⚡ reasoning</span>
+                  <span className="ml-1 text-activity-tool">⚡ reasoning</span>
                 </Label>
                 <Input
                   placeholder="4096"
@@ -621,7 +621,7 @@ export default function AdminPage() {
                     {calStatus.phase === 'error' ? (
                       <span className="text-destructive">Calibration failed</span>
                     ) : calStatus.phase === 'done' ? (
-                      <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                      <span className="flex items-center gap-1 text-activity-file">
                         <CheckCircle2 className="size-3.5" /> Complete
                       </span>
                     ) : (
@@ -639,7 +639,7 @@ export default function AdminPage() {
                       calStatus.phase === 'error'
                         ? 'bg-destructive'
                         : calStatus.phase === 'done'
-                          ? 'bg-emerald-500'
+                          ? 'bg-activity-file'
                           : 'bg-primary'
                     }`}
                     style={{ width: `${calProgress}%` }}
@@ -650,7 +650,7 @@ export default function AdminPage() {
             )}
 
             {calResult && !hasCalibrationProfiles && (
-              <div className="flex items-start gap-2 border-t pt-4 text-sm text-amber-700 dark:text-amber-300">
+              <div className="flex items-start gap-2 border-t pt-4 text-sm text-activity-tool">
                 <TriangleAlert className="mt-0.5 size-4 shrink-0" />
                 The saved result uses the retired context-only calibration. Run calibration to create resource-aware profiles.
               </div>
@@ -691,7 +691,7 @@ export default function AdminPage() {
                           <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-2">
                               <span className="text-sm font-semibold capitalize">{mode}</span>
-                              {isActive && <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400">Active</span>}
+                              {isActive && <span className="text-xs font-medium text-activity-file">Active</span>}
                               {isRecommended && <span className="text-xs text-muted-foreground">Recommended</span>}
                             </div>
                             <div className="mt-0.5 text-xs text-muted-foreground">
@@ -738,7 +738,7 @@ export default function AdminPage() {
                 </div>
 
                 {calResult.telemetry.gpu_usage_source !== 'nvidia-smi' && (
-                  <div className="flex items-start gap-2 text-xs text-amber-700 dark:text-amber-300">
+                  <div className="flex items-start gap-2 text-xs text-activity-tool">
                     <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
                     Exact GPU utilization is unavailable to this server. LM Studio confirms context and KV placement, but does not expose actual model-weight residency; profile confidence is reduced.
                   </div>

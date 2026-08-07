@@ -706,7 +706,7 @@ function App() {
                 </div>
                 <div className="mx-2 mt-1 text-[11px] text-muted-foreground">
                   Model status:{' '}
-                  <span className={selectedModelLoaded ? 'text-emerald-500' : 'text-amber-500'}>
+                  <span className={selectedModelLoaded ? 'text-activity-file' : 'text-activity-tool'}>
                     {selectedModelLoaded ? 'Loaded' : 'Unloaded'}
                   </span>
                 </div>
@@ -768,7 +768,7 @@ function App() {
                               'ml-auto text-[10px]',
                               typeof item.context?.usage_ratio === 'number' &&
                                 item.context.usage_ratio >= 0.9
-                                ? 'text-amber-500'
+                                ? 'text-activity-tool'
                                 : 'text-muted-foreground',
                             )}
                           >

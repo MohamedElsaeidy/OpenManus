@@ -183,7 +183,7 @@ export default function ConversationSettingsPage() {
             <div className="rounded-md border p-3 text-sm">
               <div className="mb-1 flex items-center justify-between">
                 <span className="font-medium">AgentMemory</span>
-                <span className={health?.agentmemory?.live ? 'text-emerald-500' : health?.agentmemory?.enabled ? 'text-amber-500' : 'text-muted-foreground'}>
+                <span className={health?.agentmemory?.live ? 'text-activity-file' : health?.agentmemory?.enabled ? 'text-activity-tool' : 'text-muted-foreground'}>
                   {health?.agentmemory?.live ? 'Live' : health?.agentmemory?.enabled ? 'Down' : 'Disabled'}
                 </span>
               </div>
@@ -194,7 +194,7 @@ export default function ConversationSettingsPage() {
             <div className="rounded-md border p-3 text-sm">
               <div className="mb-1 flex items-center justify-between">
                 <span className="font-medium">Obsidian</span>
-                <span className={health?.obsidian?.live ? 'text-emerald-500' : 'text-amber-500'}>
+                <span className={health?.obsidian?.live ? 'text-activity-file' : 'text-activity-tool'}>
                   {health?.obsidian?.live ? 'Live' : 'Waiting'}
                 </span>
               </div>
@@ -206,7 +206,7 @@ export default function ConversationSettingsPage() {
             <div className="rounded-md border p-3 text-sm">
               <div className="mb-1 flex items-center justify-between">
                 <span className="font-medium">LLM Provider</span>
-                <span className={health?.llm_connection?.live ? 'text-emerald-500' : 'text-amber-500'}>
+                <span className={health?.llm_connection?.live ? 'text-activity-file' : 'text-activity-tool'}>
                   {health?.llm_connection?.live ? 'Live' : 'Down'}
                 </span>
               </div>
@@ -373,7 +373,7 @@ export default function ConversationSettingsPage() {
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">
                   Thinking Budget
-                  <span className="ml-1 text-amber-500">⚡ reasoning</span>
+                  <span className="ml-1 text-activity-tool">⚡ reasoning</span>
                 </Label>
                 <Input
                   type="number"
@@ -419,7 +419,7 @@ export default function ConversationSettingsPage() {
                       'rounded-md border px-4 py-1.5 text-sm font-medium transition-colors',
                       enableThinking === option
                         ? option === 'on'
-                          ? 'border-amber-500 bg-amber-500/10 text-amber-600'
+                          ? 'border-activity-tool bg-activity-tool-surface text-activity-tool'
                           : option === 'off'
                             ? 'border-muted bg-muted text-muted-foreground'
                             : 'border-primary bg-primary/10 text-primary'
