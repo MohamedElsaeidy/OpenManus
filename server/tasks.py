@@ -12,8 +12,14 @@ from typing import Optional
 import redis as redis_lib
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.agent.execution_policy import ExecutionPolicy
+from app.agent.execution_policy import (
+    ExecutionPolicy,
+    execution_mode_for_chat_mode,
+    is_orchestrated,
+    normalize_chat_mode,
+)
 from app.agent.manus import Manus
+from app.agent.orchestrator import run_orchestrated
 from app.agent.trust_ledger import TrustLedger
 from app.config import config
 from app.memory.agentmemory import agentmemory
@@ -56,9 +62,17 @@ _redis_client: Optional[redis_lib.Redis] = None
 TAG_RE = re.compile(r"(^|\s)#([A-Za-z0-9_\-\/]+)")
 
 
-def resolve_execution_policy(connection: dict) -> tuple[ExecutionPolicy, str]:
+def resolve_execution_policy(
+    connection: dict, chat_mode: Optional[str] = None
+) -> tuple[ExecutionPolicy, str]:
+    # The mode picked in the composer is a per-message decision and outranks the
+    # workspace-wide default; falling back keeps older tasks and the CLI working.
+    requested = execution_mode_for_chat_mode(chat_mode)
     configured_mode = str(
-        connection.get("execution_mode") or config.agent.execution_mode or "balanced"
+        requested
+        or connection.get("execution_mode")
+        or config.agent.execution_mode
+        or "balanced"
     ).lower()
     mode = (
         configured_mode
@@ -66,7 +80,10 @@ def resolve_execution_policy(connection: dict) -> tuple[ExecutionPolicy, str]:
         else "balanced"
     )
     policy = ExecutionPolicy.for_mode(mode)
-    source = "llm_connection" if connection.get("execution_mode") else "config"
+    if requested:
+        source = f"chat_mode:{normalize_chat_mode(chat_mode)}"
+    else:
+        source = "llm_connection" if connection.get("execution_mode") else "config"
 
     api_type = str(connection.get("api_type") or "").strip().lower()
     if api_type in {"lmstudio", "ollama"}:
@@ -74,7 +91,7 @@ def resolve_execution_policy(connection: dict) -> tuple[ExecutionPolicy, str]:
         source = f"{source}_local_unmetered"
 
     legacy_steps = connection.get("max_steps")
-    if not connection.get("execution_mode") and legacy_steps not in (None, ""):
+    if not requested and not connection.get("execution_mode") and legacy_steps not in (None, ""):
         try:
             slice_steps = max(1, min(int(legacy_steps), 200))
             policy = policy.model_copy(update={"slice_steps": slice_steps})
@@ -455,6 +472,14 @@ def get_task_model(task_id: str) -> Optional[str]:
         return None
     task_input = orm.input or {}
     return task_input.get("model")
+
+
+def get_task_chat_mode(task_id: str) -> Optional[str]:
+    """The mode picked in the composer for this specific message."""
+    orm = get_task_record(task_id)
+    if orm is None:
+        return None
+    return normalize_chat_mode((orm.input or {}).get("mode"))
 
 
 def get_task_disabled_tools(task_id: str) -> set[str]:
@@ -903,6 +928,7 @@ def run_task(task_id: str, prompt: Optional[str] = None):
     enable_vendor_skills = get_task_enable_vendor_skills(task_id)
     pinned_skills = get_task_pinned_skills(task_id)
     identity_notes = get_task_identity_notes(task_id)
+    chat_mode = get_task_chat_mode(task_id)
     llm_connection = (
         get_conversation_llm_connection(conversation_id) or get_llm_connection()
     )
@@ -1013,13 +1039,14 @@ def run_task(task_id: str, prompt: Optional[str] = None):
                 config.sandbox.work_dir if sandbox is not None else str(workspace_root)
             )
             execution_policy, policy_source = resolve_execution_policy(
-                selected_connection
+                selected_connection, chat_mode
             )
             wrapped.emit(
                 "agent_configuration",
                 {
                     "execution_policy": execution_policy.public_summary(),
                     "source": policy_source,
+                    "chat_mode": chat_mode or "default",
                 },
             )
             agent = await Manus.create(
@@ -1028,7 +1055,16 @@ def run_task(task_id: str, prompt: Optional[str] = None):
                 max_steps=execution_policy.slice_steps,
                 execution_policy=execution_policy,
             )
-            result = await agent.run(wrapped, run_prompt)
+            if is_orchestrated(chat_mode):
+                result = await run_orchestrated(
+                    lead=agent,
+                    emitter=wrapped,
+                    prompt=run_prompt,
+                    workspace_root=agent_workspace,
+                    disabled_tools=disabled_tools,
+                )
+            else:
+                result = await agent.run(wrapped, run_prompt)
             agent_outcome["status"] = agent.final_status or "success"
             agent_outcome["reason"] = agent.final_reason or ""
             return result

@@ -9,6 +9,7 @@ import { useConversations } from '@/hooks/use-conversations';
 import { usePanelWidth } from '@/hooks/use-panel-width';
 import { aggregateMessages } from '@/libs/chat-messages';
 import type { Message } from '@/libs/chat-messages/types';
+import type { ChatMode } from '@/libs/chat-modes';
 import {
   getConversationHistory,
   getConversationHistoryAll,
@@ -410,7 +411,7 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
     };
   }, [conversationId, performanceMode]);
 
-  const handleSubmit = async (value: { prompt: string }) => {
+  const handleSubmit = async (value: { prompt: string; mode?: ChatMode }) => {
     const prompt = value.prompt.trim();
     if (!prompt) return;
     appendLocalUserMessage(prompt);
@@ -428,7 +429,13 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
       }
 
       if (conversationId) {
-        const sent = await sendConversationMessage(conversationId, prompt, selectedModel);
+        const sent = await sendConversationMessage(
+          conversationId,
+          prompt,
+          selectedModel,
+          undefined,
+          value.mode,
+        );
         await refreshConversations();
         if (sent.task_id) {
           setActiveTaskId(sent.task_id);
@@ -580,6 +587,7 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
             onSubmit={handleSubmit}
             onTerminate={handleTerminate}
             taskId={activeTaskId}
+            conversationId={conversationId}
           />
         </div>
       </div>

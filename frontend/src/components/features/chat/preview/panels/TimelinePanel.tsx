@@ -1,16 +1,17 @@
 /**
- * TimelinePanel — the agent's work as a scrubbable filmstrip.
+ * TimelinePanel — the agent's work as a scrubbable recording.
  *
- * The panel follows live work by default. Touching the strip pins a moment and
+ * The panel follows live work by default. Scrubbing back pins a moment and
  * stops the follow, so you can read something that already scrolled past
- * without the agent yanking the view away; "Live" resumes.
+ * without the agent yanking the view away; "Jump to live" resumes.
  */
+import { ScrubBar } from './ScrubBar';
 import { ACTIVITY } from '@/libs/activity';
 import { deriveMoments, shortPath, type Moment, type PlanStep } from '@/libs/moments';
 import { getImageUrl } from '@/libs/image';
 import { cn } from '@/libs/utils';
-import { CircleDotIcon, RadioIcon } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { CircleDotIcon } from 'lucide-react';
+import { useCallback, useMemo, useState } from 'react';
 import type { Message } from '@/libs/chat-messages/types';
 
 export const TimelinePanel = ({
@@ -21,60 +22,20 @@ export const TimelinePanel = ({
   isRunning?: boolean;
 }) => {
   const moments = useMemo(() => deriveMoments(messages), [messages]);
-  const [pinnedId, setPinnedId] = useState<string | null>(null);
-  const [isScrubbing, setIsScrubbing] = useState(false);
-  const stripRef = useRef<HTMLDivElement>(null);
+  /** Index the user pinned by scrubbing; null means "follow live". */
+  const [pinnedIndex, setPinnedIndex] = useState<number | null>(null);
 
-  const isLive = pinnedId === null;
-  const selected = isLive
-    ? moments[moments.length - 1]
-    : (moments.find(moment => moment.id === pinnedId) ?? moments[moments.length - 1]);
+  const lastIndex = Math.max(0, moments.length - 1);
+  const isLive = pinnedIndex === null;
+  const selectedIndex = isLive ? lastIndex : Math.min(pinnedIndex, lastIndex);
+  const selected = moments[selectedIndex];
 
-  // Follow the newest moment while live, but never fight the user mid-drag.
-  useEffect(() => {
-    if (!isLive || isScrubbing) return;
-    const strip = stripRef.current;
-    if (strip) strip.scrollLeft = strip.scrollWidth;
-  }, [isLive, isScrubbing, moments.length]);
-
-  const selectFromPoint = useCallback((clientX: number, clientY: number) => {
-    const element = document.elementFromPoint(clientX, clientY);
-    const thumb = element?.closest('[data-moment-id]');
-    const id = thumb?.getAttribute('data-moment-id');
-    if (id) setPinnedId(id);
-  }, []);
-
-  // Drag anywhere across the strip to scrub. Listening on the window means the
-  // pointer can leave the strip vertically without dropping the gesture.
-  useEffect(() => {
-    if (!isScrubbing) return;
-    const onMove = (event: PointerEvent) => selectFromPoint(event.clientX, event.clientY);
-    const onUp = () => setIsScrubbing(false);
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-    window.addEventListener('pointercancel', onUp);
-    return () => {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      window.removeEventListener('pointercancel', onUp);
-    };
-  }, [isScrubbing, selectFromPoint]);
-
-  const onKeyDown = (event: React.KeyboardEvent) => {
-    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
-    event.preventDefault();
-    const current = selected ? moments.findIndex(moment => moment.id === selected.id) : -1;
-    const next = Math.min(
-      moments.length - 1,
-      Math.max(0, (current < 0 ? moments.length - 1 : current) + (event.key === 'ArrowRight' ? 1 : -1)),
-    );
-    const target = moments[next];
-    if (!target) return;
-    setPinnedId(next === moments.length - 1 ? null : target.id);
-    stripRef.current
-      ?.querySelector(`[data-moment-id="${CSS.escape(target.id)}"]`)
-      ?.scrollIntoView({ block: 'nearest', inline: 'center' });
-  };
+  // Landing on the newest moment is the same thing as following live, so the
+  // bar does not get stuck one step behind the agent.
+  const select = useCallback(
+    (index: number) => setPinnedIndex(index >= moments.length - 1 ? null : index),
+    [moments.length],
+  );
 
   if (!moments.length) {
     return (
@@ -97,81 +58,46 @@ export const TimelinePanel = ({
         {selected && <MomentDetail key={selected.id} moment={selected} isRunning={isRunning} />}
       </div>
 
-      <div className="min-w-0 flex-none space-y-1.5">
-        <div className="flex items-center justify-between gap-2 px-0.5">
-          <span className="text-muted-foreground text-[11px]">
-            {isLive ? 'Following live' : 'Drag to scrub · ← → to step'}
-          </span>
-          <button
-            onClick={() => setPinnedId(null)}
-            disabled={isLive}
-            className={cn(
-              'inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors',
-              isLive
-                ? 'border-brand/40 bg-brand/10 text-brand'
-                : 'hover:bg-accent hover:text-accent-foreground',
-            )}
-          >
-            <RadioIcon className={cn('h-3 w-3', isLive && isRunning && 'live-dot')} />
-            Live
-          </button>
-        </div>
-
-        <div
-          ref={stripRef}
-          role="listbox"
-          tabIndex={0}
-          aria-label="Work timeline"
-          onKeyDown={onKeyDown}
-          onPointerDown={event => {
-            setIsScrubbing(true);
-            selectFromPoint(event.clientX, event.clientY);
-          }}
-          className="bg-muted/40 flex gap-1.5 overflow-x-auto rounded-lg border p-1.5 select-none"
-        >
-          {moments.map(moment => (
-            <MomentThumb
-              key={moment.id}
-              moment={moment}
-              isSelected={selected?.id === moment.id}
-            />
-          ))}
-        </div>
-      </div>
+      <ScrubBar
+        moments={moments}
+        selectedIndex={selectedIndex}
+        isLive={isLive}
+        isRunning={isRunning}
+        onSelect={select}
+        onGoLive={() => setPinnedIndex(null)}
+        renderPreview={(moment: Moment) => <MomentSnap moment={moment} />}
+      />
     </div>
   );
 };
 
 // ---------------------------------------------------------------------------
-// Filmstrip thumbnail
+// Snap preview
 // ---------------------------------------------------------------------------
 
-const MomentThumb = ({ moment, isSelected }: { moment: Moment; isSelected: boolean }) => {
+/**
+ * The snap preview, shown in the scrub bar's hover popover.
+ *
+ * This is the old filmstrip thumbnail, kept intact but surfaced only where the
+ * pointer is — a permanent strip of them competed with the moment detail for
+ * the panel's height.
+ */
+const MomentSnap = ({ moment }: { moment: Moment }) => {
   const style = ACTIVITY[moment.kind];
   const Icon = style.icon;
 
   return (
-    <button
-      data-moment-id={moment.id}
-      role="option"
-      aria-selected={isSelected}
-      title={`${moment.title}${moment.detail ? ` — ${moment.detail}` : ''}`}
-      className={cn(
-        'relative h-14 w-[4.5rem] shrink-0 overflow-hidden rounded-md border text-left transition-[box-shadow,transform]',
-        style.surface,
-        isSelected ? 'ring-brand ring-2 ring-offset-1 ring-offset-background' : style.border,
-      )}
-    >
+    <div className={cn('relative h-24 w-full overflow-hidden', style.surface)}>
       <ThumbBody moment={moment} />
       {/* Kind rail — readable even when the body is a screenshot. */}
       <span className={cn('absolute inset-y-0 left-0 w-[3px]', style.solid)} />
-      <span className="absolute right-0.5 bottom-0.5 rounded-sm bg-background/80 p-[2px]">
-        <Icon className={cn('h-2.5 w-2.5', style.text)} />
+      <span className="bg-background/80 absolute right-1 bottom-1 rounded-sm p-[3px]">
+        <Icon className={cn('h-3 w-3', style.text)} />
       </span>
       {moment.running && (
-        <span className="bg-brand live-dot absolute top-1 right-1 h-1.5 w-1.5 rounded-full" />
+        <span className="bg-brand live-dot absolute top-1.5 right-1.5 h-2 w-2 rounded-full" />
       )}
-    </button>
+    </div>
   );
 };
 
@@ -239,6 +165,34 @@ const ThumbBody = ({ moment }: { moment: Moment }) => {
             className="bg-activity-think h-full rounded-full"
             style={{ width: `${payload.progress.pct}%` }}
           />
+        </div>
+      </div>
+    );
+  }
+
+  if (payload.type === 'fanout') {
+    return (
+      <div className="flex h-full flex-col justify-center gap-1 pr-1.5 pl-2.5">
+        <div className="text-[9px] leading-tight font-medium">
+          {payload.workers.length} parallel agents
+        </div>
+        <div className="flex gap-0.5">
+          {payload.workers.slice(0, 6).map(worker => (
+            <span key={worker.worker_id} className="bg-activity-think h-2.5 w-1 rounded-full" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (payload.type === 'worker') {
+    return (
+      <div className="flex h-full flex-col justify-center gap-0.5 pr-1.5 pl-2.5">
+        <div className="truncate text-[9px] leading-tight font-medium">
+          {payload.workerTitle}
+        </div>
+        <div className="text-muted-foreground text-[8px] leading-tight">
+          {payload.verdict ?? payload.status}
         </div>
       </div>
     );
@@ -321,6 +275,14 @@ const MomentBody = ({ moment, isRunning }: { moment: Moment; isRunning: boolean 
 
   if (payload.type === 'tool') {
     return <ToolBody payload={payload} />;
+  }
+
+  if (payload.type === 'fanout') {
+    return <FanoutBody payload={payload} />;
+  }
+
+  if (payload.type === 'worker') {
+    return <WorkerBody payload={payload} />;
   }
 
   return (
@@ -488,6 +450,105 @@ const commandOf = (payload: Extract<Moment['payload'], { type: 'tool' }>): strin
   const record = args as Record<string, unknown>;
   return String(record.command ?? record.code ?? '');
 };
+
+/** The lead's decomposition: what each worker was told to do, and where. */
+const FanoutBody = ({ payload }: { payload: Extract<Moment['payload'], { type: 'fanout' }> }) => (
+  <div className="space-y-2">
+    {payload.reasoning && (
+      <p className="text-muted-foreground border-activity-think-border border-l-2 pl-2 text-xs">
+        {payload.reasoning}
+      </p>
+    )}
+    {payload.workers.map((worker, index) => (
+      <article key={worker.worker_id} className="rounded-lg border p-2.5">
+        <header className="flex items-center gap-2">
+          <span className="bg-activity-think-surface text-activity-think flex h-5 w-5 flex-none items-center justify-center rounded-full font-mono text-[10px] font-bold">
+            {index + 1}
+          </span>
+          <h4 className="min-w-0 flex-1 truncate text-sm font-medium">{worker.title}</h4>
+          <span className="text-muted-foreground rounded border px-1.5 py-0.5 text-[10px]">
+            {worker.kind}
+          </span>
+        </header>
+        <p className="text-muted-foreground mt-1.5 text-xs leading-snug break-words">
+          {worker.brief}
+        </p>
+        <p className="text-muted-foreground mt-1 font-mono text-[10px]">{worker.scope}/</p>
+      </article>
+    ))}
+  </div>
+);
+
+/** One worker: its brief, what it reported, and whether the lead took it. */
+const WorkerBody = ({ payload }: { payload: Extract<Moment['payload'], { type: 'worker' }> }) => {
+  const rejected = payload.verdict !== undefined && payload.verdict !== 'accept';
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <StatusChip
+          label={payload.status}
+          tone={payload.status === 'completed' ? 'ok' : payload.status === 'running' ? 'busy' : 'bad'}
+        />
+        {payload.verdict && (
+          <StatusChip
+            label={rejected ? 'rejected by lead' : 'accepted by lead'}
+            tone={rejected ? 'bad' : 'ok'}
+          />
+        )}
+        {payload.scope && (
+          <span className="text-muted-foreground rounded border px-1.5 py-0.5 font-mono text-[10px]">
+            {payload.scope}/
+          </span>
+        )}
+      </div>
+
+      {payload.reviewReason && (
+        <p
+          className={cn(
+            'rounded-lg border p-2.5 text-xs',
+            rejected
+              ? 'border-activity-error-border bg-activity-error-surface text-activity-error'
+              : 'bg-muted/40',
+          )}
+        >
+          {payload.reviewReason}
+        </p>
+      )}
+
+      {payload.brief && (
+        <section className="space-y-1">
+          <h4 className="text-muted-foreground text-[11px] font-medium">Brief</h4>
+          <p className="bg-muted/40 rounded-lg border p-2.5 text-xs leading-snug break-words">
+            {payload.brief}
+          </p>
+        </section>
+      )}
+
+      {payload.summary && (
+        <section className="space-y-1">
+          <h4 className="text-muted-foreground text-[11px] font-medium">Reported</h4>
+          <p className="rounded-lg border p-2.5 text-xs leading-snug break-words">
+            {payload.summary}
+          </p>
+        </section>
+      )}
+    </div>
+  );
+};
+
+const StatusChip = ({ label, tone }: { label: string; tone: 'ok' | 'bad' | 'busy' }) => (
+  <span
+    className={cn(
+      'rounded-full border px-2 py-0.5 text-[10px] font-medium',
+      tone === 'ok' && 'border-activity-file-border bg-activity-file-surface text-activity-file',
+      tone === 'bad' && 'border-activity-error-border bg-activity-error-surface text-activity-error',
+      tone === 'busy' && 'border-brand/40 bg-brand/10 text-brand',
+    )}
+  >
+    {label}
+  </span>
+);
 
 const ToolBody = ({ payload }: { payload: Extract<Moment['payload'], { type: 'tool' }> }) => {
   const args =

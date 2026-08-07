@@ -209,6 +209,17 @@ def _agent_event_to_progress(event: dict) -> list[dict]:
     if agent_type == "workspace_file_updated":
         return [_msg("agent:lifecycle:step:act:tool:file:updated", data)]
 
+    # Orchestration: the lead's split, each worker's lifecycle, and the join.
+    if agent_type in {
+        "orchestration_planned",
+        "orchestration_skipped",
+        "orchestration_joined",
+        "worker_started",
+        "worker_completed",
+        "worker_reviewed",
+    }:
+        return [_msg(f"agent:lifecycle:orchestration:{agent_type}", data)]
+
     if agent_type == "terminated":
         return [_msg("agent:lifecycle:terminated", data)]
 

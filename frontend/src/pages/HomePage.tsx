@@ -41,14 +41,19 @@ export default function HomePage({ selectedModel }: { selectedModel?: string }) 
     return () => { abortControllerRef.current?.abort(); };
   }, []);
 
-  const handleSubmit = async (input: { prompt: string }) => {
+  const handleSubmit = async (input: { prompt: string; mode?: string }) => {
     if (!input || isLoading) return;
     abortControllerRef.current?.abort();
     abortControllerRef.current = new AbortController();
     setIsLoading(true);
     try {
       const conversationId = params.conversationId || activeConversationId || (await ensureConversation());
-      const res = await createTask({ prompt: input.prompt, conversationId, model: selectedModel });
+      const res = await createTask({
+        prompt: input.prompt,
+        conversationId,
+        model: selectedModel,
+        mode: input.mode,
+      });
       if (res.error || !res.data) throw new Error('Failed to create task');
       await refreshTasks();
       await refreshConversations();

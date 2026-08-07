@@ -2,19 +2,35 @@ import { confirm } from '@/components/block/confirm';
 import { Button } from '@/components/ui/button';
 import { DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
+import { ChatModeSelector } from './mode-selector';
+import { loadChatMode, saveChatMode, type ChatMode } from '@/libs/chat-modes';
 import { Plus, Send, Square } from 'lucide-react';
 import { useState } from 'react';
 
 interface ChatInputProps {
   taskId?: string;
+  conversationId?: string;
   status?: 'idle' | 'thinking' | 'terminating' | 'completed';
   defaultValue?: string;
-  onSubmit?: (value: { taskId?: string; prompt: string }) => Promise<void>;
+  onSubmit?: (value: { taskId?: string; prompt: string; mode: ChatMode }) => Promise<void>;
   onTerminate?: () => Promise<void>;
 }
 
-export const ChatInput = ({ taskId, status = 'idle', defaultValue = '', onSubmit, onTerminate }: ChatInputProps) => {
+export const ChatInput = ({
+  taskId,
+  conversationId,
+  status = 'idle',
+  defaultValue = '',
+  onSubmit,
+  onTerminate,
+}: ChatInputProps) => {
   const [value, setValue] = useState(defaultValue);
+  const [mode, setMode] = useState<ChatMode>(() => loadChatMode(conversationId));
+
+  const selectMode = (next: ChatMode) => {
+    setMode(next);
+    saveChatMode(conversationId, next);
+  };
 
   const handleKeyDown = async (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -22,7 +38,7 @@ export const ChatInput = ({ taskId, status = 'idle', defaultValue = '', onSubmit
       if (status === 'terminating' || !value.trim()) {
         return;
       }
-      await onSubmit?.({ taskId, prompt: value.trim() });
+      await onSubmit?.({ taskId, prompt: value.trim(), mode });
       setValue('');
     }
   };
@@ -49,7 +65,7 @@ export const ChatInput = ({ taskId, status = 'idle', defaultValue = '', onSubmit
       return;
     }
     if (v) {
-      await onSubmit?.({ prompt: v });
+      await onSubmit?.({ prompt: v, mode });
       setValue('');
     }
   };
@@ -88,8 +104,12 @@ export const ChatInput = ({ taskId, status = 'idle', defaultValue = '', onSubmit
             }
             className="min-h-[58px] max-h-40 flex-1 resize-none border-none bg-transparent px-4 py-3 shadow-none outline-none focus-visible:ring-0 focus-visible:ring-offset-0 dark:bg-transparent"
           />
-          <div className="border-border flex items-center justify-between border-t px-4 py-2">
-            <div />
+          <div className="border-border flex items-center justify-between border-t px-3 py-2">
+            <ChatModeSelector
+              value={mode}
+              onChange={selectMode}
+              disabled={status === 'terminating'}
+            />
             <div className="flex items-center gap-2">
               <Button
                 type="button"
