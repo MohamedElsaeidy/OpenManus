@@ -4,7 +4,7 @@ import tomllib
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 def get_project_root() -> Path:
@@ -14,6 +14,20 @@ def get_project_root() -> Path:
 
 PROJECT_ROOT = get_project_root()
 WORKSPACE_ROOT = PROJECT_ROOT / "workspace"
+
+
+def resolve_workspace_path(path: str) -> str:
+    """Map a container-absolute workspace path onto this install's workspace.
+
+    The shipped config uses the Docker layout ("/app/workspace/x"), but the same
+    config file is used for local runs where the workspace is
+    PROJECT_ROOT/workspace. Inside the container the two are identical, so this
+    is a no-op there; outside it stops writes from landing on an unwritable /app.
+    """
+    for prefix in ("/app/workspace", "/workspace"):
+        if path == prefix or path.startswith(prefix + "/"):
+            return str(WORKSPACE_ROOT / path[len(prefix) :].lstrip("/"))
+    return path
 
 
 class LLMSettings(BaseModel):
@@ -152,13 +166,19 @@ class AgentMemorySettings(BaseModel):
         description="Embedding API key (empty derives from configured LLM).",
     )
     vector_index_path: str = Field(
-        default="/app/workspace/agentmemory.faiss",
+        default_factory=lambda: str(WORKSPACE_ROOT / "agentmemory.faiss"),
         description="Path to local FAISS index file.",
     )
     vector_meta_path: str = Field(
-        default="/app/workspace/agentmemory_vectors.json",
+        default_factory=lambda: str(WORKSPACE_ROOT / "agentmemory_vectors.json"),
         description="Path to vector metadata JSON file.",
     )
+
+    @field_validator("vector_index_path", "vector_meta_path")
+    @classmethod
+    def _resolve_to_local_workspace(cls, value: str) -> str:
+        return resolve_workspace_path(value)
+
     hybrid_search: bool = Field(
         default=True,
         description="Whether to combine keyword search and vector similarity search.",

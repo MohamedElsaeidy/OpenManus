@@ -10,7 +10,7 @@ import {
   HomeIcon,
   LoaderIcon,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import SyntaxHighlighter from 'react-syntax-highlighter';
 import { githubGist } from 'react-syntax-highlighter/dist/esm/styles/hljs';
 
@@ -22,8 +22,7 @@ export const WorkspacePanel = () => {
   const { data, setData } = usePreviewData();
   const [isDownloading, setIsDownloading] = useState(false);
 
-  const workspacePath = data?.type === 'workspace' ? data.path || '' : '';
-  const isShare = workspacePath.startsWith('/share');
+  const workspacePath = normalizeWorkspacePath(data?.type === 'workspace' ? data.path : '');
   const isRootDirectory = !workspacePath || workspacePath.split('/').length <= 1;
 
   const handleBackClick = () => {
@@ -37,16 +36,15 @@ export const WorkspacePanel = () => {
     setData({ type: 'workspace', path: `${workspacePath}/${item.name}` });
   };
 
-  const handleDownload = async () => {
+  const handleDownload = () => {
     if (data?.type !== 'workspace') return;
     setIsDownloading(true);
     try {
-      const url = isShare
-        ? `/api/share/download/${workspacePath}`
-        : `/api/workspace/download/${workspacePath}`;
       const a = document.createElement('a');
-      a.href = url;
-      a.download = workspacePath.split('/').pop() || 'workspace';
+      a.href = `/api/workspace/download/${encodeWorkspacePath(workspacePath)}`;
+      // No download attribute: the server sends Content-Disposition: attachment,
+      // and its filename is the authoritative one — a directory downloads as
+      // "<name>.zip", which a client-side name would clobber.
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -58,9 +56,7 @@ export const WorkspacePanel = () => {
   const { data: workspace, isLoading } = useAsync(
     async () => {
       if (data?.type !== 'workspace') return;
-      const res = await fetch(
-        isShare ? `/api/share/workspace/${workspacePath}` : `/api/workspace/${workspacePath}`,
-      );
+      const res = await fetch(`/api/workspace/${encodeWorkspacePath(workspacePath)}`);
       if (!res.ok) return;
       if (res.headers.get('content-type')?.includes('application/json')) {
         return (await res.json()) as {
@@ -111,7 +107,7 @@ export const WorkspacePanel = () => {
                   </Button>
                 )}
                 <CardTitle className="text-base">
-                  {data?.type === 'workspace' && data.path ? data.path : 'Root Directory'}
+                  {workspacePath || 'Root Directory'}
                 </CardTitle>
               </div>
               <DownloadButton isDownloading={isDownloading} onDownload={handleDownload} />
@@ -167,7 +163,7 @@ export const WorkspacePanel = () => {
                 </Button>
               )}
               <CardTitle className="text-base">
-                File: {data?.type === 'workspace' ? data.path : ''}
+                File: {workspacePath}
               </CardTitle>
             </div>
             <DownloadButton isDownloading={isDownloading} onDownload={handleDownload} />
@@ -175,21 +171,16 @@ export const WorkspacePanel = () => {
         </CardHeader>
         <CardContent>
           <div className="overflow-hidden rounded-md border">
-            {workspace instanceof Blob &&
-            (workspace.type.includes('image') ||
-              (data?.type === 'workspace' &&
-                data.path?.match(/\.(jpg|jpeg|png|gif|bmp|svg|webp)$/i))) ? (
-              <img
-                src={URL.createObjectURL(workspace)}
-                alt={data?.type === 'workspace' ? data.path || 'File preview' : 'File preview'}
-                className="h-auto w-full object-contain"
-              />
-            ) : workspace instanceof Blob ? (
-              <FileContent blob={workspace} path={data?.type === 'workspace' ? data.path ?? '' : ''} />
-            ) : (
+            {!(workspace instanceof Blob) ? (
               <div className="text-muted-foreground p-4 text-center">
                 This file type cannot be previewed
               </div>
+            ) : isPdf(workspace, workspacePath) ? (
+              <PdfPreview blob={workspace} />
+            ) : isImage(workspace, workspacePath) ? (
+              <ImagePreview blob={workspace} alt={workspacePath || 'File preview'} />
+            ) : (
+              <FileContent blob={workspace} path={workspacePath} />
             )}
           </div>
         </CardContent>
@@ -336,6 +327,57 @@ const DownloadButton = ({
     )}
   </Button>
 );
+
+/**
+ * The agent reports absolute paths as seen from inside its sandbox
+ * ("/workspace/paper.tex") or from inside the API container
+ * ("/app/workspace/paper.tex"). The workspace API is rooted at the workspace
+ * itself, so both prefixes have to come off before the path is used in a URL.
+ */
+const normalizeWorkspacePath = (path: string | undefined): string =>
+  (path ?? '').replace(/^\/?(app\/)?workspace\/?/, '').replace(/^\/+/, '');
+
+/** Encode each segment so spaces and "#"/"?" in filenames survive the URL. */
+const encodeWorkspacePath = (path: string): string =>
+  path.split('/').filter(Boolean).map(encodeURIComponent).join('/');
+
+/** Object URL that is revoked when the blob changes or the panel unmounts. */
+const useObjectUrl = (blob: Blob): string | undefined => {
+  const [url, setUrl] = useState<string>();
+  useEffect(() => {
+    const objectUrl = URL.createObjectURL(blob);
+    setUrl(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [blob]);
+  return url;
+};
+
+const isPdf = (blob: Blob, path: string) =>
+  blob.type.includes('pdf') || /\.pdf$/i.test(path);
+
+const isImage = (blob: Blob, path: string) =>
+  blob.type.includes('image') || /\.(jpg|jpeg|png|gif|bmp|svg|webp)$/i.test(path);
+
+const PdfPreview = ({ blob }: { blob: Blob }) => {
+  const url = useObjectUrl(blob);
+  if (!url) return null;
+  return (
+    <object data={url} type="application/pdf" className="h-[600px] w-full">
+      <div className="text-muted-foreground p-4 text-center text-sm">
+        This browser cannot display PDFs inline.{' '}
+        <a href={url} download className="text-primary underline">
+          Download the PDF
+        </a>
+      </div>
+    </object>
+  );
+};
+
+const ImagePreview = ({ blob, alt }: { blob: Blob; alt: string }) => {
+  const url = useObjectUrl(blob);
+  if (!url) return null;
+  return <img src={url} alt={alt} className="h-auto w-full object-contain" />;
+};
 
 const FileContent = ({ blob, path }: { blob: Blob; path: string }) => {
   const { data: content, isLoading } = useAsync(async () => blob.text(), [], { deps: [blob] });

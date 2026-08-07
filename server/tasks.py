@@ -406,16 +406,17 @@ def summarize_workspace(workspace_root: Path) -> dict:
     if not workspace_root.exists():
         return {"pdfs": [], "tex": [], "logs": [], "warning": "Workspace not found."}
 
-    def _relative_files(pattern: str) -> list[str]:
-        return sorted(
-            str(path.relative_to(workspace_root))
-            for path in workspace_root.rglob(pattern)
-            if path.is_file()
-        )
+    # One walk instead of one per extension — task workspaces can hold a full
+    # checked-out project, and rglob restats every entry.
+    by_suffix: dict[str, list[str]] = {".pdf": [], ".tex": [], ".log": []}
+    for path in workspace_root.rglob("*"):
+        bucket = by_suffix.get(path.suffix.lower())
+        if bucket is not None and path.is_file():
+            bucket.append(str(path.relative_to(workspace_root)))
 
-    pdfs = _relative_files("*.pdf")
-    tex_files = _relative_files("*.tex")
-    logs = _relative_files("*.log")
+    pdfs = sorted(by_suffix[".pdf"])
+    tex_files = sorted(by_suffix[".tex"])
+    logs = sorted(by_suffix[".log"])
     warning = None
 
     if not pdfs and (tex_files or logs):

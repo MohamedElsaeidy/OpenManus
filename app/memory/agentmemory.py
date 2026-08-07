@@ -8,7 +8,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from app.config import config
+from app.config import WORKSPACE_ROOT, config
 from app.utils.logger import logger
 
 
@@ -27,7 +27,7 @@ class AgentMemoryClient:
         self.settings = config.agentmemory
         self.enabled_in_config = self.settings.enabled
         self.project = self.settings.project
-        self.db_path = "/app/workspace/agentmemory.db"
+        self.db_path = str(WORKSPACE_ROOT / "agentmemory.db")
         self._vector_lock = threading.Lock()
         self.last_vector_error: Optional[str] = None
         self._init_db()
