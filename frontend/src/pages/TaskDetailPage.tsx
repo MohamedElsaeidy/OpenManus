@@ -2,8 +2,11 @@ import { ChatInput } from '@/components/features/chat/input';
 import { ChatMessages } from '@/components/features/chat/messages';
 import { ChatPreview } from '@/components/features/chat/preview';
 import { usePreviewData } from '@/components/features/chat/preview/store';
+import { ResizeHandle } from '@/components/ui/resize-handle';
+import { PageSidebarTrigger } from '@/components/ui/sidebar-toggle';
 import { useAutoScroll } from '@/hooks/use-auto-scroll';
 import { useConversations } from '@/hooks/use-conversations';
+import { usePanelWidth } from '@/hooks/use-panel-width';
 import { aggregateMessages } from '@/libs/chat-messages';
 import type { Message } from '@/libs/chat-messages/types';
 import {
@@ -18,6 +21,11 @@ import { GaugeIcon, PanelRightClose, PanelRightOpen, Radio, Zap } from 'lucide-r
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
+
+/** Manus's Computer sizing. The chat needs room to stay readable beside it. */
+const PREVIEW_DEFAULT_WIDTH = 620;
+const PREVIEW_MIN_WIDTH = 360;
+const CHAT_MIN_WIDTH = 420;
 
 export default function TaskDetailPage({ selectedModel }: { selectedModel?: string }) {
   const params = useParams();
@@ -42,6 +50,18 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
   );
   const [executionProgress, setExecutionProgress] = useState<{ mode: string; slice: number } | null>(null);
   const [totalTokens, setTotalTokens] = useState(0);
+
+  const {
+    width: previewWidth,
+    dragTo: dragPreviewTo,
+    nudge: nudgePreview,
+    reset: resetPreview,
+  } = usePanelWidth({
+    storageKey: 'openmanus.previewWidth',
+    defaultWidth: PREVIEW_DEFAULT_WIDTH,
+    min: PREVIEW_MIN_WIDTH,
+    minRemaining: CHAT_MIN_WIDTH,
+  });
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
@@ -471,8 +491,10 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
 
   return (
     <div className="flex h-full w-full flex-row justify-between">
-      <div className="flex min-w-0 flex-1 flex-col border-r bg-background">
+      {/* No border-r: the resize handle draws the divider between the panes. */}
+      <div className="bg-background flex min-w-0 flex-1 flex-col">
         <div className="flex h-12 items-center gap-2 border-b px-3 sm:px-5">
+          <PageSidebarTrigger className="-ml-1 shrink-0" />
           <div className="shrink-0 font-semibold">OpenManus</div>
           {executionProgress && (
             <div className="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground">
@@ -562,7 +584,22 @@ export default function TaskDetailPage({ selectedModel }: { selectedModel?: stri
         </div>
       </div>
       {!isPreviewCollapsed && (
-        <div className="hidden w-[44vw] min-w-[420px] max-w-[760px] items-center justify-center bg-muted/30 p-2 lg:flex">
+        <ResizeHandle
+          value={previewWidth}
+          min={PREVIEW_MIN_WIDTH}
+          max={typeof window === 'undefined' ? 0 : window.innerWidth - CHAT_MIN_WIDTH}
+          onDragTo={dragPreviewTo}
+          onNudge={nudgePreview}
+          onReset={resetPreview}
+          label="Resize Manus's Computer"
+          className="hidden lg:block"
+        />
+      )}
+      {!isPreviewCollapsed && (
+        <div
+          className="bg-muted/30 hidden shrink-0 items-center justify-center p-2 lg:flex"
+          style={{ width: previewWidth }}
+        >
           <ChatPreview
             taskId={activeTaskId || conversationId || 'workspace'}
             conversationId={conversationId}
