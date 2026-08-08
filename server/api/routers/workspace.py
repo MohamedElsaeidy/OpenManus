@@ -27,6 +27,7 @@ DEFAULT_FILE_MODE = 0o644
 class WriteFileRequest(BaseModel):
     content: str
 
+
 # Paths the agent reports are absolute inside its own sandbox ("/workspace/x")
 # or inside the API container ("/app/workspace/x"). Both mean the same file on
 # the shared volume, so strip either prefix before resolving.

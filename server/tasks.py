@@ -91,7 +91,11 @@ def resolve_execution_policy(
         source = f"{source}_local_unmetered"
 
     legacy_steps = connection.get("max_steps")
-    if not requested and not connection.get("execution_mode") and legacy_steps not in (None, ""):
+    if (
+        not requested
+        and not connection.get("execution_mode")
+        and legacy_steps not in (None, "")
+    ):
         try:
             slice_steps = max(1, min(int(legacy_steps), 200))
             policy = policy.model_copy(update={"slice_steps": slice_steps})
