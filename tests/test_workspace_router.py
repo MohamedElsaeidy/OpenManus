@@ -125,7 +125,9 @@ def test_save_writes_file_and_reports_size(client, tmp_path):
 
     assert response.status_code == 200
     assert response.json()["path"] == "conversations/abc/paper.tex"
-    assert (tmp_path / "conversations/abc/paper.tex").read_text() == "\\documentclass{report}"
+    assert (
+        tmp_path / "conversations/abc/paper.tex"
+    ).read_text() == "\\documentclass{report}"
 
 
 def test_save_creates_missing_parent_directories(client, tmp_path):
@@ -140,7 +142,9 @@ def test_save_creates_missing_parent_directories(client, tmp_path):
 def test_save_leaves_no_temp_files_behind(client, tmp_path):
     client.put("/api/workspace/file/conversations/abc/paper.tex", json={"content": "x"})
 
-    leftovers = [p.name for p in (tmp_path / "conversations/abc").iterdir() if ".tmp" in p.name]
+    leftovers = [
+        p.name for p in (tmp_path / "conversations/abc").iterdir() if ".tmp" in p.name
+    ]
     assert leftovers == []
 
 
@@ -161,7 +165,9 @@ def test_new_files_are_group_and_world_readable(client, tmp_path):
 
 
 def test_save_rejects_a_directory_target(client):
-    response = client.put("/api/workspace/file/conversations/abc", json={"content": "x"})
+    response = client.put(
+        "/api/workspace/file/conversations/abc", json={"content": "x"}
+    )
 
     assert response.status_code == 400
 

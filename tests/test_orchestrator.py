@@ -269,7 +269,9 @@ def test_duplicate_worker_ids_are_dropped(patched_worker):
             ]
         }
     )
-    lead = FakeAgent(replies=[payload, '{"verdict": "accept"}', '{"verdict": "accept"}'])
+    lead = FakeAgent(
+        replies=[payload, '{"verdict": "accept"}', '{"verdict": "accept"}']
+    )
     emitter = FakeEmitter()
 
     asyncio.run(run_orchestrated(lead, emitter, "task", "/workspace"))
@@ -331,13 +333,17 @@ def test_terminate_is_never_denied():
 def test_an_unknown_kind_falls_back_to_the_narrowest_profile():
     brief = WorkerBrief(id="w", title="t", brief="b", kind="wizardry")
 
-    assert brief.allowed_tools() == WorkerBrief(
-        id="w", title="t", brief="b", kind="research"
-    ).allowed_tools()
+    assert (
+        brief.allowed_tools()
+        == WorkerBrief(id="w", title="t", brief="b", kind="research").allowed_tools()
+    )
 
 
 def test_workspace_disabled_tools_are_carried_into_workers(patched_worker):
-    lead = FakeAgent(replies=[decomposition_json(2), '{"verdict":"accept"}'] + ['{"verdict":"accept"}'])
+    lead = FakeAgent(
+        replies=[decomposition_json(2), '{"verdict":"accept"}']
+        + ['{"verdict":"accept"}']
+    )
     emitter = FakeEmitter()
 
     asyncio.run(

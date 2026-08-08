@@ -62,7 +62,9 @@ WORKER_TOOL_PROFILES: dict[str, frozenset] = {
             "bash",
         }
     ),
-    "write": frozenset({"read_files", "glob", "grep", "line_edit", "apply_patch_editor"}),
+    "write": frozenset(
+        {"read_files", "glob", "grep", "line_edit", "apply_patch_editor"}
+    ),
     "analysis": frozenset({"read_files", "glob", "grep", "python_execute", "bash"}),
 }
 

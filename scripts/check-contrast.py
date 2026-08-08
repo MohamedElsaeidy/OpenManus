@@ -67,15 +67,32 @@ def pairings(tokens: dict) -> list:
     background, card = tokens["background"], tokens["card"]
     checks = [
         ("foreground on background", tokens["foreground"], background, TEXT_MIN),
-        ("muted-foreground on background", tokens["muted-foreground"], background, TEXT_MIN),
+        (
+            "muted-foreground on background",
+            tokens["muted-foreground"],
+            background,
+            TEXT_MIN,
+        ),
         ("muted-foreground on card", tokens["muted-foreground"], card, TEXT_MIN),
-        ("brand-foreground on brand", tokens["brand-foreground"], tokens["brand"], TEXT_MIN),
+        (
+            "brand-foreground on brand",
+            tokens["brand-foreground"],
+            tokens["brand"],
+            TEXT_MIN,
+        ),
         ("brand on card", tokens["brand"], card, GRAPHIC_MIN),
     ]
     for kind in ACTIVITY_KINDS:
         base = tokens[f"activity-{kind}"]
         checks.append((f"{kind} on card", base, card, TEXT_MIN))
-        checks.append((f"{kind} on own surface", base, tokens[f"activity-{kind}-surface"], TEXT_MIN))
+        checks.append(
+            (
+                f"{kind} on own surface",
+                base,
+                tokens[f"activity-{kind}-surface"],
+                TEXT_MIN,
+            )
+        )
     return checks
 
 
@@ -86,7 +103,9 @@ def report(tokens: dict, label: str) -> int:
         ratio = contrast_ratio(foreground, background)
         passed = ratio >= minimum
         failures += 0 if passed else 1
-        print(f"  {'PASS' if passed else 'FAIL'}  {ratio:5.2f}:1  (need {minimum})  {name}")
+        print(
+            f"  {'PASS' if passed else 'FAIL'}  {ratio:5.2f}:1  (need {minimum})  {name}"
+        )
     return failures
 
 
